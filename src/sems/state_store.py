@@ -16,7 +16,7 @@ from typing import Optional, Dict, Any
 _state: Dict[str, Dict[str, Any]] = {}
 
 # Supported flow types (per Project-Requirements.txt Sections 12-15, 17, 19)
-FLOW_TYPES = ["create", "edit", "join", "leave", "delete", "close", "register", "invite"]
+FLOW_TYPES = ["create", "edit", "join", "leave", "delete", "close", "register", "invite", "view_attendees"]
 
 # Steps for each flow type
 STEPS = {
@@ -27,7 +27,8 @@ STEPS = {
     "delete": ["select_event", "confirm_delete"],
     "close": ["select_event", "confirm_groupchat"],
     "register": ["get_name"],
-    "invite": ["select_event", "search_user", "select_user"]
+    "invite": ["select_event", "search_user", "select_user"],
+    "view_attendees": ["select_event"]
 }
 
 

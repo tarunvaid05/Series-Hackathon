@@ -42,6 +42,7 @@ CLOSE_INTENTS = ["close event", "close registration", "stop registration"]
 INVITE_INTENTS = ["invite", "invite someone", "invite people", "invite friend", "invite friends", "send invite", "add people"]
 APPROVE_PATTERN = "approve "  # "approve John"
 DENY_PATTERN = "deny "  # "deny John"
+VIEW_ATTENDEES_INTENTS = ("view attendees", "who's coming", "show attendees", "list attendees", "who joined", "see attendees")
 
 # Prompts for create flow steps
 PROMPTS = {
@@ -175,6 +176,11 @@ def detect_intent(text: str) -> Tuple[str, Optional[str]]:
     for phrase in LEAVE_INTENTS:
         if phrase in text_lower:
             return ("leave_event", None)
+
+    # Check for view attendees intent (Section 22.1)
+    for phrase in VIEW_ATTENDEES_INTENTS:
+        if phrase in text_lower:
+            return ("view_attendees", None)
 
     # Check for my enrolled events intent
     for phrase in MY_EVENTS_INTENTS:
@@ -498,6 +504,8 @@ def process_message(phone_number: str, text: str) -> str:
         return _handle_close_flow(phone_number, state, text_stripped)
     elif flow_type == "invite":
         return _handle_invite_flow(phone_number, text_stripped, state)
+    elif flow_type == "view_attendees":
+        return _handle_view_attendees_flow(phone_number, state, text_stripped)
     else:
         # Unknown flow type - clear and prompt
         state_store.clear_state(phone_number)
@@ -563,6 +571,14 @@ def _handle_new_intent(phone_number: str, intent: str) -> str:
             return "You don't have any events to invite people to. Create an event first!"
         state_store.start_invite_flow(phone_number)
         return "Which event would you like to invite someone to?\n\n" + format_event_list(events, show_spots=False)
+
+    elif intent == "view_attendees":
+        events = event_store.get_events_by_host(phone_number)
+        if not events:
+            return "You haven't created any events yet. Text 'create event' to get started!"
+        state_store.start_flow(phone_number, "view_attendees")
+        event_list = format_hosted_events(events)
+        return f"Your events:\n\n{event_list}\n\nWhich event would you like to view attendees for? Reply with the number."
 
     elif intent == "my_events":
         # Show hosted events and enrolled events with status
@@ -882,6 +898,54 @@ def _handle_delete_flow(phone_number: str, state: dict, intent: str, text: str) 
         else:
             state_store.clear_state(phone_number)
             return "Deletion cancelled. Your event is still active."
+
+    return "Text 'cancel' to exit or try again."
+
+
+def _handle_view_attendees_flow(phone_number: str, state: dict, text: str) -> str:
+    """Handle the view attendees flow (Section 22.1)."""
+    current_step = state["step"]
+    events = event_store.get_events_by_host(phone_number)
+
+    if current_step == "select_event":
+        if not events:
+            state_store.clear_state(phone_number)
+            return "You don't have any events."
+
+        try:
+            selection = int(text)
+            if 1 <= selection <= len(events):
+                selected_event = events[selection - 1]
+                state_store.clear_state(phone_number)
+
+                # Get participants list
+                participants = selected_event.get("participants", [])
+                event_title = selected_event["title"]
+
+                if not participants:
+                    return f"No one has joined '{event_title}' yet."
+
+                # Build attendee list with names
+                attendee_lines = []
+                for participant_phone in participants:
+                    user = user_store.get_user(participant_phone)
+                    if user and user.get("name"):
+                        name = user["name"]
+                        # Check if name is a phone placeholder
+                        if _is_phone_placeholder(name):
+                            attendee_lines.append(f"- {participant_phone}")
+                        else:
+                            attendee_lines.append(f"- {name} ({participant_phone})")
+                    else:
+                        attendee_lines.append(f"- {participant_phone}")
+
+                attendee_list = "\n".join(attendee_lines)
+                total = len(participants)
+                return f"Attendees for {event_title}:\n{attendee_list}\nTotal: {total} attending"
+            else:
+                return f"Please enter a number between 1 and {len(events)}."
+        except ValueError:
+            return f"Please enter a number between 1 and {len(events)}."
 
     return "Text 'cancel' to exit or try again."
 
