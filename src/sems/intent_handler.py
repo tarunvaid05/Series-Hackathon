@@ -392,10 +392,18 @@ def _handle_edit_flow(phone_number: str, state: dict, intent: str, text: str) ->
         # User selects a field to edit
         if text in EDIT_FIELDS:
             field = EDIT_FIELDS[text]
+            event_id = state.get("selected_event_id")
+            event = event_store.get_event_by_id(event_id)
             state_store.set_edit_field(phone_number, field)
             state_store.set_step(phone_number, "new_value")
             display_name = FIELD_DISPLAY_NAMES.get(field, field)
-            return EDIT_PROMPTS["new_value"].format(field=display_name)
+
+            # Show current value
+            current_value = event.get(field, "") if event else ""
+            if field == "capacity" and current_value is None:
+                current_value = "No limit"
+
+            return f"Currently: {current_value}\n\nEnter the new {display_name}:"
         else:
             return "Please enter a number (1-5) or 'done' to finish editing."
 
