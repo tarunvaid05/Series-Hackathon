@@ -590,6 +590,10 @@ def _handle_new_intent(phone_number: str, intent: str) -> str:
         if hosted:
             lines.append("Your hosted events:")
             lines.append(format_enrolled_events_with_host(hosted, is_host=True))
+            lines.append("")
+            lines.append("Reply with an event number to see who's attending.")
+            # Start view_attendees flow so user can reply with a number
+            state_store.start_flow(phone_number, "view_attendees")
         if joined:
             if hosted:
                 lines.append("")
