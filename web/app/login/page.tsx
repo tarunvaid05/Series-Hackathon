@@ -42,7 +42,13 @@ export default function LoginPage() {
 
       // Store phone in localStorage and redirect
       setLoggedInPhone(phone)
-      router.push("/")
+
+      // Redirect new users to edit-profile, existing users to home
+      if (data.isNewUser) {
+        router.push("/edit-profile")
+      } else {
+        router.push("/")
+      }
     } catch {
       setError("An error occurred. Please try again.")
     } finally {

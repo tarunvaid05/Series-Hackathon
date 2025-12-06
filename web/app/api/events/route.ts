@@ -1,10 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import fs from 'fs';
-import path from 'path';
-import { randomUUID } from 'crypto';
-
-const DATA_DIR = path.join(process.cwd(), '..', 'data');
-const EVENTS_FILE = path.join(DATA_DIR, 'events.json');
+import { supabase } from '@/lib/supabase';
 
 interface Event {
   id: string;
@@ -22,48 +17,42 @@ interface Event {
   invited_phones?: string[];
   pending_invites?: string[];
   group_chat_id?: number;
-}
-
-function readEvents(): Event[] {
-  try {
-    const data = fs.readFileSync(EVENTS_FILE, 'utf-8');
-    return JSON.parse(data);
-  } catch {
-    return [];
-  }
-}
-
-function writeEvents(events: Event[]): void {
-  fs.writeFileSync(EVENTS_FILE, JSON.stringify(events, null, 2));
+  simulated_days?: number;
 }
 
 // GET /api/events - Return all events (optionally filter by query params)
 export async function GET(request: NextRequest) {
   try {
-    const events = readEvents();
     const { searchParams } = new URL(request.url);
 
-    let filteredEvents = events;
+    let query = supabase.from('events').select('*');
 
     // Filter by host_phone if provided
     const hostPhone = searchParams.get('host_phone');
     if (hostPhone) {
-      filteredEvents = filteredEvents.filter(e => e.host_phone === hostPhone);
+      query = query.eq('host_phone', hostPhone);
     }
 
     // Filter by status if provided
     const status = searchParams.get('status');
     if (status === 'open' || status === 'closed') {
-      filteredEvents = filteredEvents.filter(e => e.status === status);
+      query = query.eq('status', status);
     }
 
     // Filter by participant phone if provided
     const participant = searchParams.get('participant');
     if (participant) {
-      filteredEvents = filteredEvents.filter(e => e.participants.includes(participant));
+      query = query.contains('participants', [participant]);
     }
 
-    return NextResponse.json(filteredEvents);
+    const { data: events, error } = await query;
+
+    if (error) {
+      console.error('Supabase error reading events:', error);
+      return NextResponse.json({ error: 'Failed to read events' }, { status: 500 });
+    }
+
+    return NextResponse.json(events || []);
   } catch (error) {
     console.error('Error reading events:', error);
     return NextResponse.json({ error: 'Failed to read events' }, { status: 500 });
@@ -85,10 +74,7 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    const events = readEvents();
-
-    const newEvent: Event = {
-      id: randomUUID(),
+    const newEvent: Omit<Event, 'id'> = {
       host_phone,
       title,
       description,
@@ -101,10 +87,18 @@ export async function POST(request: NextRequest) {
       denied_requests: [],
     };
 
-    events.push(newEvent);
-    writeEvents(events);
+    const { data: createdEvent, error } = await supabase
+      .from('events')
+      .insert(newEvent)
+      .select()
+      .single();
 
-    return NextResponse.json(newEvent, { status: 201 });
+    if (error) {
+      console.error('Supabase error creating event:', error);
+      return NextResponse.json({ error: 'Failed to create event' }, { status: 500 });
+    }
+
+    return NextResponse.json(createdEvent, { status: 201 });
   } catch (error) {
     console.error('Error creating event:', error);
     return NextResponse.json({ error: 'Failed to create event' }, { status: 500 });

@@ -1,37 +1,5 @@
-import { promises as fs } from 'fs';
-import path from 'path';
 import { NextRequest, NextResponse } from 'next/server';
-
-const DATA_DIR = path.join(process.cwd(), '..', 'data');
-const USERS_FILE = path.join(DATA_DIR, 'users.json');
-
-interface User {
-  name: string;
-  registered_at: string;
-  bio?: string;
-  image?: string;
-  age?: number;
-}
-
-interface UsersData {
-  [phone: string]: User;
-}
-
-async function readUsersFile(): Promise<UsersData> {
-  try {
-    const content = await fs.readFile(USERS_FILE, 'utf-8');
-    return JSON.parse(content);
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
-      return {};
-    }
-    throw error;
-  }
-}
-
-async function writeUsersFile(data: UsersData): Promise<void> {
-  await fs.writeFile(USERS_FILE, JSON.stringify(data, null, 2), 'utf-8');
-}
+import { supabase } from '@/lib/supabase';
 
 function validatePhoneNumber(phone: string): boolean {
   return typeof phone === 'string' && phone.startsWith('+');
@@ -56,35 +24,54 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    const users = await readUsersFile();
+    // Check if user exists
+    const { data: existingUser, error: selectError } = await supabase
+      .from('users')
+      .select('*')
+      .eq('phone', phone)
+      .single();
 
-    if (users[phone]) {
+    if (selectError && selectError.code !== 'PGRST116') {
+      // PGRST116 = no rows returned (user not found)
+      console.error('Supabase select error:', selectError);
+      return NextResponse.json(
+        { success: false, error: 'Internal server error' },
+        { status: 500 }
+      );
+    }
+
+    if (existingUser) {
       // User exists, return their profile
       return NextResponse.json({
         success: true,
-        user: {
-          phone,
-          ...users[phone]
-        }
+        user: existingUser
       });
     }
 
-    // User doesn't exist, create new user with phone as name
-    const newUser: User = {
-      name: phone,
-      registered_at: new Date().toISOString()
-    };
+    // User doesn't exist, create new user with default name "User"
+    const { data: newUser, error: insertError } = await supabase
+      .from('users')
+      .insert({
+        phone,
+        name: 'User',
+        registered_at: new Date().toISOString()
+      })
+      .select()
+      .single();
 
-    users[phone] = newUser;
-    await writeUsersFile(users);
+    if (insertError) {
+      console.error('Supabase insert error:', insertError);
+      return NextResponse.json(
+        { success: false, error: 'Internal server error' },
+        { status: 500 }
+      );
+    }
 
     return NextResponse.json(
       {
         success: true,
-        user: {
-          phone,
-          ...newUser
-        }
+        user: newUser,
+        isNewUser: true
       },
       { status: 201 }
     );

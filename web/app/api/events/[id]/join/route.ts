@@ -1,42 +1,8 @@
 import { NextRequest, NextResponse } from 'next/server';
-import fs from 'fs';
-import path from 'path';
+import { supabase } from '@/lib/supabase';
+import { sendMessage } from '@/lib/messaging';
 
-const DATA_DIR = path.join(process.cwd(), '..', 'data');
-const EVENTS_FILE = path.join(DATA_DIR, 'events.json');
-
-interface Event {
-  id: string;
-  host_phone: string;
-  title: string;
-  description: string;
-  datetime: string;
-  location: string;
-  capacity: number | null;
-  participants: string[];
-  status: 'open' | 'closed';
-  pending_requests: string[];
-  denied_requests: string[];
-  private?: boolean;
-  invited_phones?: string[];
-  pending_invites?: string[];
-  group_chat_id?: number;
-}
-
-function readEvents(): Event[] {
-  try {
-    const data = fs.readFileSync(EVENTS_FILE, 'utf-8');
-    return JSON.parse(data);
-  } catch {
-    return [];
-  }
-}
-
-function writeEvents(events: Event[]): void {
-  fs.writeFileSync(EVENTS_FILE, JSON.stringify(events, null, 2));
-}
-
-// POST /api/events/[id]/join - Add user to event participants
+// POST /api/events/[id]/join - Request to join event (requires host approval)
 export async function POST(
   request: NextRequest,
   { params }: { params: Promise<{ id: string }> }
@@ -54,14 +20,20 @@ export async function POST(
       );
     }
 
-    const events = readEvents();
-    const eventIndex = events.findIndex(e => e.id === id);
+    // Fetch the event
+    const { data: event, error: fetchError } = await supabase
+      .from('events')
+      .select('*')
+      .eq('id', id)
+      .single();
 
-    if (eventIndex === -1) {
-      return NextResponse.json({ error: 'Event not found' }, { status: 404 });
+    if (fetchError) {
+      if (fetchError.code === 'PGRST116') {
+        return NextResponse.json({ error: 'Event not found' }, { status: 404 });
+      }
+      console.error('Supabase error fetching event:', fetchError);
+      return NextResponse.json({ error: 'Failed to join event' }, { status: 500 });
     }
-
-    const event = events[eventIndex];
 
     // Check if user is the host
     if (event.host_phone === phone) {
@@ -71,28 +43,80 @@ export async function POST(
       );
     }
 
-    // Check if user already joined
-    if (event.participants.includes(phone)) {
+    // Check if user already joined (is a participant)
+    const participants = event.participants || [];
+    if (participants.includes(phone)) {
       return NextResponse.json(
         { error: 'Already joined this event' },
         { status: 400 }
       );
     }
 
+    // Check if user already has a pending request
+    const pendingRequests = event.pending_requests || [];
+    if (pendingRequests.includes(phone)) {
+      return NextResponse.json(
+        { error: 'You already have a pending request for this event' },
+        { status: 400 }
+      );
+    }
+
+    // Check if user was denied (cannot re-apply per Section 18.2)
+    const deniedRequests = event.denied_requests || [];
+    if (deniedRequests.includes(phone)) {
+      return NextResponse.json(
+        { error: 'Your request for this event was denied and cannot be resubmitted' },
+        { status: 400 }
+      );
+    }
+
     // Check capacity
-    if (event.capacity !== null && event.participants.length >= event.capacity) {
+    if (event.capacity !== null && participants.length >= event.capacity) {
       return NextResponse.json(
         { error: 'Event is at full capacity' },
         { status: 400 }
       );
     }
 
-    // Add participant
-    event.participants.push(phone);
-    events[eventIndex] = event;
-    writeEvents(events);
+    // Get requester's name from users table
+    const { data: userData } = await supabase
+      .from('users')
+      .select('name')
+      .eq('phone', phone)
+      .single();
 
-    return NextResponse.json(event);
+    const requesterName = userData?.name || phone;
+
+    // Add to pending_requests (NOT participants)
+    const updatedPendingRequests = [...pendingRequests, phone];
+
+    const { error: updateError } = await supabase
+      .from('events')
+      .update({ pending_requests: updatedPendingRequests })
+      .eq('id', id);
+
+    if (updateError) {
+      console.error('Supabase error updating event:', updateError);
+      return NextResponse.json({ error: 'Failed to submit join request' }, { status: 500 });
+    }
+
+    // Send notification to host (per Section 18.1)
+    try {
+      console.log(`Sending join request notification to host: ${event.host_phone}`);
+      const msgResult = await sendMessage(
+        event.host_phone,
+        `${requesterName} is requesting to join "${event.title}". Reply 'approve ${requesterName}' or 'deny ${requesterName}'`
+      );
+      console.log('Message send result:', JSON.stringify(msgResult));
+    } catch (msgError) {
+      console.error('Failed to send notification to host:', msgError);
+      // Don't fail the request if notification fails - the request was still submitted
+    }
+
+    return NextResponse.json({
+      status: 'pending',
+      message: 'Request sent! Waiting for host approval.'
+    });
   } catch (error) {
     console.error('Error joining event:', error);
     return NextResponse.json({ error: 'Failed to join event' }, { status: 500 });
