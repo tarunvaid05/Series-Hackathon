@@ -1,54 +1,34 @@
 """
 User Store Module for SEMS (Series Events Messaging System)
 
-Manages JSON-based user registration persistence.
+Manages Supabase-based user registration persistence.
 Per Project-Requirements.txt Section 17 (User Registration):
-- Name stored in data/users.json with phone number as key
+- Name stored in users table with phone number as key
 - Name persists across all interactions
 - First-time users prompted for name, existing users skip
 """
 
-import json
-import os
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Dict, List, Optional
 
-# Path to users JSON file
-DATA_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), "data")
-USERS_FILE = os.path.join(DATA_DIR, "users.json")
-
-
-def _load_users() -> dict:
-    """Read users from JSON file, return empty dict if not exists."""
-    if not os.path.exists(USERS_FILE):
-        return {}
-    try:
-        with open(USERS_FILE, "r") as f:
-            return json.load(f)
-    except (json.JSONDecodeError, IOError):
-        return {}
-
-
-def _save_users(users: dict) -> None:
-    """Write users to JSON file, create data/ dir if needed."""
-    if not os.path.exists(DATA_DIR):
-        os.makedirs(DATA_DIR)
-    with open(USERS_FILE, "w") as f:
-        json.dump(users, f, indent=2)
+from sems.supabase_client import get_client
 
 
 def is_registered(phone: str) -> bool:
     """Check if phone has name registered."""
-    users = _load_users()
-    return phone in users and users[phone].get("name") is not None
+    client = get_client()
+    response = client.table("users").select("phone, name").eq("phone", phone).maybe_single().execute()
+    if response.data:
+        return response.data.get("name") is not None
+    return False
 
 
 def get_name(phone: str) -> Optional[str]:
     """Get name for phone, None if not registered."""
-    users = _load_users()
-    user = users.get(phone)
-    if user:
-        return user.get("name")
+    client = get_client()
+    response = client.table("users").select("name").eq("phone", phone).maybe_single().execute()
+    if response.data:
+        return response.data.get("name")
     return None
 
 
@@ -56,22 +36,27 @@ def register_user(phone: str, name: str) -> bool:
     """Register name for phone, return success."""
     if not phone or not name:
         return False
-    users = _load_users()
-    users[phone] = {
+    client = get_client()
+    user_data = {
+        "phone": phone,
         "name": name,
-        "registered_at": datetime.utcnow().isoformat()
+        "registered_at": datetime.now(timezone.utc).isoformat()
     }
-    _save_users(users)
-    return True
+    # Use upsert to handle both insert and update cases
+    response = client.table("users").upsert(user_data).execute()
+    return response.data is not None and len(response.data) > 0
 
 
 def get_all_names(phones: List[str]) -> Dict[str, Optional[str]]:
     """Get names for multiple phones (for group chat). Returns dict of phone -> name."""
-    users = _load_users()
-    result = {}
-    for phone in phones:
-        user = users.get(phone)
-        result[phone] = user.get("name") if user else None
+    if not phones:
+        return {}
+    client = get_client()
+    response = client.table("users").select("phone, name").in_("phone", phones).execute()
+    result = {phone: None for phone in phones}
+    if response.data:
+        for user in response.data:
+            result[user["phone"]] = user.get("name")
     return result
 
 
@@ -87,14 +72,12 @@ def find_users_by_name(name: str) -> List[dict]:
     """
     if not name:
         return []
-    users = _load_users()
-    search_lower = name.lower()
-    matches = []
-    for phone, user_data in users.items():
-        user_name = user_data.get("name")
-        if user_name and search_lower in user_name.lower():
-            matches.append({"phone": phone, "name": user_name})
-    return matches
+    client = get_client()
+    # Use ilike for case-insensitive partial matching
+    response = client.table("users").select("phone, name").ilike("name", f"%{name}%").execute()
+    if response.data:
+        return [{"phone": u["phone"], "name": u["name"]} for u in response.data]
+    return []
 
 
 def get_user(phone: str) -> Optional[dict]:
@@ -117,8 +100,14 @@ def get_user(phone: str) -> Optional[dict]:
             "age": int             # optional
         }
     """
-    users = _load_users()
-    return users.get(phone)
+    client = get_client()
+    response = client.table("users").select("*").eq("phone", phone).maybe_single().execute()
+    if response.data:
+        # Return without the phone key to match original format
+        user = response.data.copy()
+        user.pop("phone", None)
+        return user
+    return None
 
 
 def update_user(phone: str, updates: dict) -> bool:
@@ -140,14 +129,12 @@ def update_user(phone: str, updates: dict) -> bool:
     if not phone or not updates:
         return False
 
-    users = _load_users()
-
-    if phone not in users:
+    # First check if user exists
+    client = get_client()
+    check = client.table("users").select("phone").eq("phone", phone).maybe_single().execute()
+    if not check.data:
         return False
 
-    # Merge updates into existing user data
-    for key, value in updates.items():
-        users[phone][key] = value
-
-    _save_users(users)
-    return True
+    # Update the user
+    response = client.table("users").update(updates).eq("phone", phone).execute()
+    return response.data is not None and len(response.data) > 0
