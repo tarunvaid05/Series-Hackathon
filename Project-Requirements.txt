@@ -1,11 +1,11 @@
 Project Requirements: Series Events Messaging System (SEMS)
-Hackathon Build – Phase 1
-version: 2025-12-05
+Hackathon Build – Phase 1 & 2
+version: 2025-12-06
 
 1 Overview
 The Series Events Messaging System (SEMS) enables the creation of real-world events through natural language messaging. Users communicate with a designated Series-issued phone number via SMS or iMessage to initiate and complete an event creation workflow.
 
-In Phase 1, SEMS supports basic conversational event creation only. It does not include event discovery, user signup flows, persistent storage, multi-user sharing, or group chat coordination. The goal is to validate conversational UX, message routing, and interaction flow using the provided messaging API and Kafka connectivity.
+In Phase 1, SEMS supports basic conversational event creation only. Phase 2 extends this with event editing, event discovery, joining events, leaving events, and deleting events. Events are persisted to local JSON storage. The goal is to validate conversational UX, message routing, and interaction flow using the provided messaging API and Kafka connectivity.
 
 2 User Management
 Phase 1 supports a single user role: end user identified solely by phone number. The system actor is the Series Events Number, representing backend processing exposed as a messaging participant.
@@ -42,7 +42,7 @@ Raw date/time text
 Location
 Participant limit (nullable)
 
-No parsing, validation, editing, or deletion features are required.
+No parsing or validation features are required. Editing and deletion are Phase 2 features.
 
 5 System Behaviors
 SEMS must:
@@ -68,8 +68,8 @@ Maintaining transient conversational state
 
 Kafka logging of completed events is optional.
 
-7 Non-Goals (Phase 1 Limits)
-SEMS Phase 1 does not include event publishing, event search, RSVP management, databases, identity authentication, group chats, reminders, agentic routing, recommendation logic, or any UI besides messaging.
+7 Non-Goals (Phase 1 & 2 Limits)
+SEMS does not include databases (uses local JSON file), identity authentication, group chats, reminders, agentic routing, recommendation logic, or any UI besides messaging.
 
 8 Usability Requirements
 SEMS must guide users conversationally. Prompts should be simple, confirmation messages should acknowledge input, and invalid input must not break progression.
@@ -79,3 +79,116 @@ Phase 1 does not parse or validate dates; user-provided text is accepted as-is.
 
 10 Deployment
 Users interact solely via SMS/iMessage through the Series Events number. No installations, accounts, or web interfaces are required. SEMS may run locally or remotely as long as it interfaces with the messaging API.
+
+--- PHASE 2 REQUIREMENTS ---
+
+11 Data Persistence
+Phase 2 uses a local JSON file for event storage at data/events.json.
+
+11.1 Event Data Structure
+Each event contains:
+- id: unique identifier (UUID)
+- host_phone: phone number of creator
+- title: event title
+- description: event description
+- datetime: raw date/time text
+- location: event location
+- capacity: participant limit (nullable for unlimited)
+- participants: list of phone numbers who joined
+
+11.2 Storage Behavior
+Events are persisted on creation confirmation. Updates are saved immediately on edit confirmation. File is read on startup and written on each modification.
+
+12 Event Editing Workflow
+Only the host (creator) can edit their own events.
+
+12.1 Edit Intent Triggering
+Workflow begins when SEMS detects keywords like "edit event", "edit my event", "change my event", or "modify event".
+
+12.2 Edit Flow
+1. SEMS lists events hosted by the user with numbers
+2. User selects event by number
+3. SEMS presents field menu:
+   "Which field would you like to change?
+   1. Title
+   2. Description
+   3. Date/Time
+   4. Location
+   5. Capacity
+   Reply with a number or 'done' to finish editing."
+4. User selects field number
+5. SEMS prompts for new value
+6. User provides new value
+7. SEMS confirms change and returns to field menu
+8. Loop continues until user says "done"
+9. SEMS shows updated summary and clears edit state
+
+12.3 Edit Restrictions
+Users can only edit events they created (host_phone matches). If user has no events, inform them.
+
+13 Event Discovery and Joining Workflow
+
+13.1 Discovery Intent Triggering
+Workflow begins when SEMS detects keywords like "find events", "what's happening", "events near", "join event", "any events", or location-based queries.
+
+13.2 Discovery Flow
+1. SEMS shows available events (excluding user's own events and full-capacity events)
+2. Events display: title, date/time, location, spots remaining
+3. User can reply with event number to join
+4. SEMS confirms join and updates participant list
+5. Capacity display updates (e.g., "3/10 spots filled")
+
+13.3 Join Restrictions
+- Users cannot join their own events
+- Users cannot join events at full capacity
+- Users cannot join events they already joined
+
+14 Leave Event Workflow
+
+14.1 Leave Intent Triggering
+Workflow begins when SEMS detects keywords like "leave event", "cancel rsvp", "drop out", or "quit event".
+
+14.2 Leave Flow
+1. SEMS lists events the user has joined
+2. User selects event by number
+3. SEMS confirms removal and updates participant list
+4. Capacity is restored
+
+14.3 Leave Restrictions
+Users can only leave events they have joined. Hosts cannot "leave" their own events (must delete instead).
+
+15 Delete Event Workflow
+
+15.1 Delete Intent Triggering
+Workflow begins when SEMS detects keywords like "delete event", "remove event", "cancel event" (when host), or "delete my event".
+
+15.2 Delete Flow
+1. SEMS lists events hosted by the user
+2. User selects event by number
+3. SEMS asks for confirmation: "Are you sure you want to delete '[title]'? Reply 'yes' to confirm."
+4. On confirmation, event is removed from storage
+5. SEMS confirms deletion
+
+15.3 Delete Restrictions
+Only hosts can delete their own events. Participants are implicitly removed when event is deleted.
+
+16 User Experience Guidelines
+
+16.1 Pretty Printing
+- Use clear formatting with line breaks for readability
+- Number lists for selection (1, 2, 3...)
+- Show relevant details concisely
+- Acknowledge each user action
+
+16.2 Event Display Format
+For event listings:
+"[number]. [title]
+   When: [datetime]
+   Where: [location]
+   Spots: [current]/[capacity] or 'unlimited'"
+
+16.3 Error Handling
+- Invalid number selections: prompt to try again
+- No events found: friendly message with suggestion
+- Already joined: inform user they're already participating
+- At capacity: inform user event is full
