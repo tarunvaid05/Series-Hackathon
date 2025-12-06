@@ -40,6 +40,7 @@ export default function EventDashboard({ sidebarOpen, onMenuClick, userPhone }: 
   const [events, setEvents] = useState<Event[]>([])
   const [userEvents, setUserEvents] = useState<Event[]>([])
   const [userNames, setUserNames] = useState<Record<string, { name: string }>>({})
+  const [successMessage, setSuccessMessage] = useState<string | null>(null)
 
   // Collect all phone numbers from user events for lookup
   const collectPhoneNumbers = useCallback((events: Event[]): string[] => {
@@ -185,16 +186,20 @@ export default function EventDashboard({ sidebarOpen, onMenuClick, userPhone }: 
 
   const handleJoinEvent = async (eventId: string) => {
     setError(null)
+    setSuccessMessage(null)
     try {
       const res = await fetch(`/api/events/${eventId}/join`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ phone: userPhone })
       })
+      const data = await res.json()
       if (!res.ok) {
-        const errorData = await res.json()
-        throw new Error(errorData.error || 'Failed to join event')
+        throw new Error(data.error || 'Failed to join event')
       }
+      // Handle pending request response (requires host approval per Section 18)
+      setSuccessMessage(data.message || 'Request sent!')
+      setTimeout(() => setSuccessMessage(null), 5000)
       await fetchEvents()
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to join event')
@@ -295,6 +300,12 @@ export default function EventDashboard({ sidebarOpen, onMenuClick, userPhone }: 
         {error && (
           <div className="mb-4 p-4 bg-red-50 border border-red-200 rounded-lg text-red-700">
             {error}
+          </div>
+        )}
+
+        {successMessage && (
+          <div className="mb-4 p-4 bg-green-50 border border-green-200 rounded-lg text-green-700">
+            {successMessage}
           </div>
         )}
 
