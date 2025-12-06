@@ -1,40 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import fs from 'fs';
-import path from 'path';
-
-const DATA_DIR = path.join(process.cwd(), '..', 'data');
-const EVENTS_FILE = path.join(DATA_DIR, 'events.json');
-
-interface Event {
-  id: string;
-  host_phone: string;
-  title: string;
-  description: string;
-  datetime: string;
-  location: string;
-  capacity: number | null;
-  participants: string[];
-  status: 'open' | 'closed';
-  pending_requests: string[];
-  denied_requests: string[];
-  private?: boolean;
-  invited_phones?: string[];
-  pending_invites?: string[];
-  group_chat_id?: number;
-}
-
-function readEvents(): Event[] {
-  try {
-    const data = fs.readFileSync(EVENTS_FILE, 'utf-8');
-    return JSON.parse(data);
-  } catch {
-    return [];
-  }
-}
-
-function writeEvents(events: Event[]): void {
-  fs.writeFileSync(EVENTS_FILE, JSON.stringify(events, null, 2));
-}
+import { supabase } from '@/lib/supabase';
 
 // POST /api/events/[id]/approve - Approve a join request
 export async function POST(
@@ -54,17 +19,26 @@ export async function POST(
       );
     }
 
-    const events = readEvents();
-    const eventIndex = events.findIndex(e => e.id === id);
+    // Fetch the event
+    const { data: event, error: fetchError } = await supabase
+      .from('events')
+      .select('*')
+      .eq('id', id)
+      .single();
 
-    if (eventIndex === -1) {
-      return NextResponse.json({ error: 'Event not found' }, { status: 404 });
+    if (fetchError) {
+      if (fetchError.code === 'PGRST116') {
+        return NextResponse.json({ error: 'Event not found' }, { status: 404 });
+      }
+      console.error('Supabase error fetching event:', fetchError);
+      return NextResponse.json({ error: 'Failed to approve request' }, { status: 500 });
     }
 
-    const event = events[eventIndex];
+    const pendingRequests = event.pending_requests || [];
+    const participants = event.participants || [];
 
     // Verify phone is in pending_requests
-    if (!event.pending_requests.includes(phone)) {
+    if (!pendingRequests.includes(phone)) {
       return NextResponse.json(
         { error: 'Phone number not in pending requests' },
         { status: 400 }
@@ -72,23 +46,33 @@ export async function POST(
     }
 
     // Check capacity before approving
-    if (event.capacity !== null && event.participants.length >= event.capacity) {
+    if (event.capacity !== null && participants.length >= event.capacity) {
       return NextResponse.json(
         { error: 'Event is at full capacity' },
         { status: 400 }
       );
     }
 
-    // Remove from pending_requests
-    event.pending_requests = event.pending_requests.filter(p => p !== phone);
+    // Remove from pending_requests and add to participants
+    const updatedPendingRequests = pendingRequests.filter((p: string) => p !== phone);
+    const updatedParticipants = [...participants, phone];
 
-    // Add to participants
-    event.participants.push(phone);
+    const { data: updatedEvent, error: updateError } = await supabase
+      .from('events')
+      .update({
+        pending_requests: updatedPendingRequests,
+        participants: updatedParticipants,
+      })
+      .eq('id', id)
+      .select()
+      .single();
 
-    events[eventIndex] = event;
-    writeEvents(events);
+    if (updateError) {
+      console.error('Supabase error updating event:', updateError);
+      return NextResponse.json({ error: 'Failed to approve request' }, { status: 500 });
+    }
 
-    return NextResponse.json(event);
+    return NextResponse.json(updatedEvent);
   } catch (error) {
     console.error('Error approving request:', error);
     return NextResponse.json({ error: 'Failed to approve request' }, { status: 500 });

@@ -1,37 +1,5 @@
-import { promises as fs } from 'fs';
-import path from 'path';
 import { NextRequest, NextResponse } from 'next/server';
-
-const DATA_DIR = path.join(process.cwd(), '..', 'data');
-const USERS_FILE = path.join(DATA_DIR, 'users.json');
-
-interface User {
-  name: string;
-  registered_at: string;
-  bio?: string;
-  image?: string;
-  age?: number;
-}
-
-interface UsersData {
-  [phone: string]: User;
-}
-
-async function readUsersFile(): Promise<UsersData> {
-  try {
-    const content = await fs.readFile(USERS_FILE, 'utf-8');
-    return JSON.parse(content);
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
-      return {};
-    }
-    throw error;
-  }
-}
-
-async function writeUsersFile(data: UsersData): Promise<void> {
-  await fs.writeFile(USERS_FILE, JSON.stringify(data, null, 2), 'utf-8');
-}
+import { supabase } from '@/lib/supabase';
 
 function validatePhoneNumber(phone: string): boolean {
   return typeof phone === 'string' && phone.startsWith('+');
@@ -55,21 +23,30 @@ export async function GET(
       );
     }
 
-    const users = await readUsersFile();
+    const { data: user, error } = await supabase
+      .from('users')
+      .select('*')
+      .eq('phone', phone)
+      .single();
 
-    if (!users[phone]) {
+    if (error) {
+      if (error.code === 'PGRST116') {
+        // No rows returned
+        return NextResponse.json(
+          { success: false, error: 'User not found' },
+          { status: 404 }
+        );
+      }
+      console.error('Supabase select error:', error);
       return NextResponse.json(
-        { success: false, error: 'User not found' },
-        { status: 404 }
+        { success: false, error: 'Internal server error' },
+        { status: 500 }
       );
     }
 
     return NextResponse.json({
       success: true,
-      user: {
-        phone,
-        ...users[phone]
-      }
+      user
     });
   } catch (error) {
     console.error('Get user error:', error);
@@ -95,18 +72,30 @@ export async function PUT(
       );
     }
 
-    const users = await readUsersFile();
+    // Check if user exists
+    const { data: existingUser, error: checkError } = await supabase
+      .from('users')
+      .select('phone')
+      .eq('phone', phone)
+      .single();
 
-    if (!users[phone]) {
+    if (checkError) {
+      if (checkError.code === 'PGRST116') {
+        return NextResponse.json(
+          { success: false, error: 'User not found' },
+          { status: 404 }
+        );
+      }
+      console.error('Supabase check error:', checkError);
       return NextResponse.json(
-        { success: false, error: 'User not found' },
-        { status: 404 }
+        { success: false, error: 'Internal server error' },
+        { status: 500 }
       );
     }
 
     // Only allow updating specific fields
     const allowedFields = ['name', 'bio', 'image', 'age'];
-    const updates: Partial<User> = {};
+    const updates: Record<string, string | number | null> = {};
 
     for (const field of allowedFields) {
       if (body[field] !== undefined) {
@@ -118,27 +107,32 @@ export async function PUT(
               { status: 400 }
             );
           }
-          updates[field as keyof User] = age as never;
+          updates[field] = age;
         } else {
-          updates[field as keyof User] = body[field];
+          updates[field] = body[field];
         }
       }
     }
 
     // Update user with new fields
-    users[phone] = {
-      ...users[phone],
-      ...updates
-    };
+    const { data: updatedUser, error: updateError } = await supabase
+      .from('users')
+      .update(updates)
+      .eq('phone', phone)
+      .select()
+      .single();
 
-    await writeUsersFile(users);
+    if (updateError) {
+      console.error('Supabase update error:', updateError);
+      return NextResponse.json(
+        { success: false, error: 'Internal server error' },
+        { status: 500 }
+      );
+    }
 
     return NextResponse.json({
       success: true,
-      user: {
-        phone,
-        ...users[phone]
-      }
+      user: updatedUser
     });
   } catch (error) {
     console.error('Update user error:', error);

@@ -1,10 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
-import fs from 'fs';
-import path from 'path';
+import { supabase } from '@/lib/supabase';
 import { notifyParticipants } from '@/lib/messaging';
-
-const DATA_DIR = path.join(process.cwd(), '..', 'data');
-const EVENTS_FILE = path.join(DATA_DIR, 'events.json');
 
 interface Event {
   id: string;
@@ -22,19 +18,7 @@ interface Event {
   invited_phones?: string[];
   pending_invites?: string[];
   group_chat_id?: number;
-}
-
-function readEvents(): Event[] {
-  try {
-    const data = fs.readFileSync(EVENTS_FILE, 'utf-8');
-    return JSON.parse(data);
-  } catch {
-    return [];
-  }
-}
-
-function writeEvents(events: Event[]): void {
-  fs.writeFileSync(EVENTS_FILE, JSON.stringify(events, null, 2));
+  simulated_days?: number;
 }
 
 // GET /api/events/[id] - Return single event by ID
@@ -44,11 +28,19 @@ export async function GET(
 ) {
   try {
     const { id } = await params;
-    const events = readEvents();
-    const event = events.find(e => e.id === id);
 
-    if (!event) {
-      return NextResponse.json({ error: 'Event not found' }, { status: 404 });
+    const { data: event, error } = await supabase
+      .from('events')
+      .select('*')
+      .eq('id', id)
+      .single();
+
+    if (error) {
+      if (error.code === 'PGRST116') {
+        return NextResponse.json({ error: 'Event not found' }, { status: 404 });
+      }
+      console.error('Supabase error reading event:', error);
+      return NextResponse.json({ error: 'Failed to read event' }, { status: 500 });
     }
 
     return NextResponse.json(event);
@@ -66,12 +58,6 @@ export async function PUT(
   try {
     const { id } = await params;
     const body = await request.json();
-    const events = readEvents();
-    const eventIndex = events.findIndex(e => e.id === id);
-
-    if (eventIndex === -1) {
-      return NextResponse.json({ error: 'Event not found' }, { status: 404 });
-    }
 
     // Only allow updating specific fields
     const allowedFields = ['title', 'description', 'datetime', 'location', 'capacity'];
@@ -87,10 +73,20 @@ export async function PUT(
       }
     }
 
-    events[eventIndex] = { ...events[eventIndex], ...updates };
-    writeEvents(events);
+    const { data: updatedEvent, error } = await supabase
+      .from('events')
+      .update(updates)
+      .eq('id', id)
+      .select()
+      .single();
 
-    const updatedEvent = events[eventIndex];
+    if (error) {
+      if (error.code === 'PGRST116') {
+        return NextResponse.json({ error: 'Event not found' }, { status: 404 });
+      }
+      console.error('Supabase error updating event:', error);
+      return NextResponse.json({ error: 'Failed to update event' }, { status: 500 });
+    }
 
     // Notify participants about the update (non-blocking)
     if (updatedEvent.participants && updatedEvent.participants.length > 0) {
@@ -116,14 +112,21 @@ export async function DELETE(
 ) {
   try {
     const { id } = await params;
-    const events = readEvents();
-    const eventIndex = events.findIndex(e => e.id === id);
 
-    if (eventIndex === -1) {
-      return NextResponse.json({ error: 'Event not found' }, { status: 404 });
+    // First fetch the event to get participant info for notification
+    const { data: eventToDelete, error: fetchError } = await supabase
+      .from('events')
+      .select('*')
+      .eq('id', id)
+      .single();
+
+    if (fetchError) {
+      if (fetchError.code === 'PGRST116') {
+        return NextResponse.json({ error: 'Event not found' }, { status: 404 });
+      }
+      console.error('Supabase error fetching event:', fetchError);
+      return NextResponse.json({ error: 'Failed to delete event' }, { status: 500 });
     }
-
-    const eventToDelete = events[eventIndex];
 
     // Notify participants about cancellation (non-blocking)
     if (eventToDelete.participants && eventToDelete.participants.length > 0) {
@@ -135,8 +138,16 @@ export async function DELETE(
       });
     }
 
-    events.splice(eventIndex, 1);
-    writeEvents(events);
+    // Now delete the event
+    const { error: deleteError } = await supabase
+      .from('events')
+      .delete()
+      .eq('id', id);
+
+    if (deleteError) {
+      console.error('Supabase error deleting event:', deleteError);
+      return NextResponse.json({ error: 'Failed to delete event' }, { status: 500 });
+    }
 
     return NextResponse.json({ success: true, message: 'Event deleted' });
   } catch (error) {

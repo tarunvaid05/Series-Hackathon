@@ -1,36 +1,8 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { promises as fs } from 'fs';
-import path from 'path';
-
-const DATA_DIR = path.join(process.cwd(), '..', 'data');
-const USERS_FILE = path.join(DATA_DIR, 'users.json');
-
-interface User {
-  name: string;
-  registered_at: string;
-  bio?: string;
-  image?: string;
-  age?: number;
-}
-
-interface UsersData {
-  [phone: string]: User;
-}
+import { supabase } from '@/lib/supabase';
 
 interface UserLookupResult {
   [phone: string]: { name: string };
-}
-
-async function readUsersFile(): Promise<UsersData> {
-  try {
-    const content = await fs.readFile(USERS_FILE, 'utf-8');
-    return JSON.parse(content);
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
-      return {};
-    }
-    throw error;
-  }
 }
 
 // POST /api/users/lookup - Bulk lookup user names by phone numbers
@@ -47,12 +19,24 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    const users = await readUsersFile();
+    const { data: users, error } = await supabase
+      .from('users')
+      .select('phone, name')
+      .in('phone', phones);
+
+    if (error) {
+      console.error('Supabase lookup error:', error);
+      return NextResponse.json({ error: 'Failed to lookup users' }, { status: 500 });
+    }
+
+    // Build result map
     const result: UserLookupResult = {};
+    const foundPhones = new Set(users?.map(u => u.phone) || []);
 
     for (const phone of phones) {
-      if (users[phone]) {
-        result[phone] = { name: users[phone].name };
+      const user = users?.find(u => u.phone === phone);
+      if (user) {
+        result[phone] = { name: user.name };
       } else {
         result[phone] = { name: 'Unknown' };
       }
