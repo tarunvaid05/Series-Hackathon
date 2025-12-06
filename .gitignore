@@ -46,6 +46,11 @@ env/
 # OS files
 .DS_Store
 
+# Node.js / Next.js
+node_modules/
+.next/
+*.tsbuildinfo
+
 # Environment variables
 .env
 .env.local
