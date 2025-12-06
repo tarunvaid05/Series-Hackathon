@@ -239,8 +239,8 @@ def format_joined_events(events: List[dict]) -> str:
     return "\n".join(lines)
 
 
-def format_enrolled_events(events: List[dict]) -> str:
-    """Format enrolled events with status (capacity or closed)."""
+def format_enrolled_events_with_host(events: List[dict], is_host: bool = False) -> str:
+    """Format events with status (capacity or closed), optionally marking as host."""
     if not events:
         return ""
 
@@ -260,7 +260,8 @@ def format_enrolled_events(events: List[dict]) -> str:
                     status_str = f"({current_count} joined)"
             else:
                 status_str = f"({current_count} joined)"
-        lines.append(f"{i}. {event['title']} {status_str}")
+        host_label = " (Host)" if is_host else ""
+        lines.append(f"{i}. {event['title']} {status_str}{host_label}")
 
     return "\n".join(lines)
 
@@ -409,12 +410,21 @@ def _handle_new_intent(phone_number: str, intent: str) -> str:
         return f"Your open events:\n\n{event_list}\n\n{CLOSE_PROMPTS['select_event']}"
 
     elif intent == "my_events":
-        # Show enrolled events with status
-        events = event_store.get_joined_events(phone_number)
-        if not events:
-            return "You haven't joined any events yet. Text 'find events' to discover events!"
-        event_list = format_enrolled_events(events)
-        return f"Your enrolled events:\n\n{event_list}"
+        # Show hosted events and enrolled events with status
+        hosted = event_store.get_events_by_host(phone_number)
+        joined = event_store.get_joined_events(phone_number)
+        if not hosted and not joined:
+            return "You don't have any events yet. Text 'create event' to host one or 'find events' to join!"
+        lines = []
+        if hosted:
+            lines.append("Your hosted events:")
+            lines.append(format_enrolled_events_with_host(hosted, is_host=True))
+        if joined:
+            if hosted:
+                lines.append("")
+            lines.append("Events you've joined:")
+            lines.append(format_enrolled_events_with_host(joined, is_host=False))
+        return "\n".join(lines)
 
     else:
         # Default welcome message
