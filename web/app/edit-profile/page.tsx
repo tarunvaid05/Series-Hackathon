@@ -12,6 +12,7 @@ export default function EditProfilePage() {
   const router = useRouter()
   const [hasChanges, setHasChanges] = useState(false)
   const [userPhone, setUserPhone] = useState<string | null>(null)
+  const [userName, setUserName] = useState<string>('')
   const [isCheckingAuth, setIsCheckingAuth] = useState(true)
 
   useEffect(() => {
@@ -20,6 +21,15 @@ export default function EditProfilePage() {
       router.push('/login')
     } else {
       setUserPhone(phone)
+      // Fetch user name for sidebar
+      fetch(`/api/users/${encodeURIComponent(phone)}`)
+        .then(res => res.json())
+        .then(data => {
+          if (data.success && data.user) {
+            setUserName(data.user.name || '')
+          }
+        })
+        .catch(() => {})
     }
     setIsCheckingAuth(false)
   }, [router])
@@ -38,6 +48,8 @@ export default function EditProfilePage() {
         isOpen={sidebarOpen}
         onClose={() => setSidebarOpen(false)}
         onToggle={() => setSidebarOpen(!sidebarOpen)}
+        userName={userName}
+        userPhone={userPhone}
       />
       <div
         className={`flex-1 flex flex-col overflow-hidden transition-all duration-300 ${sidebarOpen ? "ml-64" : "ml-0"}`}
