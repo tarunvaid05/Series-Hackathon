@@ -15,6 +15,14 @@ except ImportError:
 
 logger = logging.getLogger(__name__)
 
+
+def _is_phone_placeholder(name: str) -> bool:
+    """Check if a name is actually a phone number placeholder (starts with + or all digits)."""
+    if not name:
+        return True
+    # Phone numbers typically start with + or are all digits
+    return name.startswith('+') or name.replace('-', '').replace(' ', '').isdigit()
+
 # Intent keywords (Section 3.1: keyword matching is sufficient)
 CREATE_INTENTS = ["create event", "new event", "host an event", "make an event", "schedule an event", "plan an event"]
 CANCEL_KEYWORDS = ["cancel"]
@@ -31,8 +39,10 @@ MY_EVENTS_INTENTS = ["my events", "my enrolled events", "enrolled events", "even
 
 # Phase 3 intent keywords (Sections 17-21)
 CLOSE_INTENTS = ["close event", "close registration", "stop registration"]
+INVITE_INTENTS = ["invite", "invite someone", "invite people", "invite friend", "invite friends", "send invite", "add people"]
 APPROVE_PATTERN = "approve "  # "approve John"
 DENY_PATTERN = "deny "  # "deny John"
+VIEW_ATTENDEES_INTENTS = ("view attendees", "who's coming", "show attendees", "list attendees", "who joined", "see attendees")
 
 # Prompts for create flow steps
 PROMPTS = {
@@ -41,6 +51,7 @@ PROMPTS = {
     "datetime": "When is this event? (date and time)",
     "location": "Where will it be held?",
     "capacity": "How many people can attend? (not including yourself, or 'skip' for no limit)",
+    "private": "Should this event be private? Private events are only visible to people you invite. (yes/no)",
     "confirm": None  # Special handling - shows summary
 }
 
@@ -100,6 +111,14 @@ def detect_intent(text: str) -> Tuple[str, Optional[str]]:
     """
     text_lower = text.lower().strip()
 
+    # Check for invite response (accept/decline) - must check early before other patterns
+    if text_lower.startswith("accept "):
+        event_hint = text[7:].strip()  # Get text after "accept "
+        return ("accept_invite", event_hint)
+    if text_lower.startswith("decline "):
+        event_hint = text[8:].strip()  # Get text after "decline "
+        return ("decline_invite", event_hint)
+
     # Check for restart first
     for keyword in RESTART_KEYWORDS:
         if keyword in text_lower:
@@ -133,6 +152,11 @@ def detect_intent(text: str) -> Tuple[str, Optional[str]]:
         if phrase in text_lower:
             return ("close_event", None)
 
+    # Check for invite intent (Phase 3)
+    for phrase in INVITE_INTENTS:
+        if phrase in text_lower:
+            return ("invite_event", None)
+
     # Check for approve pattern (Phase 3) - "approve John"
     if text_lower.startswith(APPROVE_PATTERN):
         name = text[len(APPROVE_PATTERN):].strip()
@@ -152,6 +176,11 @@ def detect_intent(text: str) -> Tuple[str, Optional[str]]:
     for phrase in LEAVE_INTENTS:
         if phrase in text_lower:
             return ("leave_event", None)
+
+    # Check for view attendees intent (Section 22.1)
+    for phrase in VIEW_ATTENDEES_INTENTS:
+        if phrase in text_lower:
+            return ("view_attendees", None)
 
     # Check for my enrolled events intent
     for phrase in MY_EVENTS_INTENTS:
@@ -185,6 +214,8 @@ def detect_intent(text: str) -> Tuple[str, Optional[str]]:
                 return ("my_events", None)
             elif ai_intent == "delete_event":
                 return ("delete_event", None)
+            elif ai_intent == "invite_event":
+                return ("invite_event", None)
             elif ai_intent == "no_intent":
                 return ("no_intent", None)
         except Exception as e:
@@ -197,6 +228,7 @@ def detect_intent(text: str) -> Tuple[str, Optional[str]]:
 def format_summary(event: dict) -> str:
     """Format event data as a summary for confirmation."""
     capacity_str = event["capacity"] if event["capacity"] else "No limit"
+    privacy_str = "Private (invite-only)" if event.get("private") else "Public"
     return f"""Here's your event summary:
 
 Title: {event["title"]}
@@ -204,6 +236,7 @@ Description: {event["description"]}
 When: {event["datetime"]}
 Where: {event["location"]}
 Capacity: {capacity_str}
+Privacy: {privacy_str}
 
 Reply 'confirm' to create or 'restart' to start over."""
 
@@ -400,11 +433,10 @@ def process_message(phone_number: str, text: str) -> str:
     # Handle restart - clears state and starts create flow
     if intent == "restart":
         state_store.clear_state(phone_number)
-        # Check registration before starting create flow
+        # Auto-register if needed (uses phone as placeholder name)
         if not user_store.is_registered(phone_number):
-            state_store.start_flow(phone_number, "register")
-            state_store.set_pending_flow(phone_number, "create_event")
-            return REGISTER_PROMPTS["get_name"]
+            user_store.register_user(phone_number, phone_number)
+            logger.info(f"Auto-registered new user on restart: {phone_number}")
         state_store.start_flow(phone_number, "create")
         return PROMPTS["title"]
 
@@ -412,7 +444,8 @@ def process_message(phone_number: str, text: str) -> str:
     if intent == "menu":
         state_store.clear_state(phone_number)
         name = user_store.get_name(phone_number)
-        greeting = f"Hi {name}!" if name else "Hi!"
+        # Only greet by name if it's a real name (not phone placeholder)
+        greeting = f"Hi {name}!" if name and not _is_phone_placeholder(name) else "Hi!"
         return (f"{greeting} Here's what you can do:\n"
                 "- 'create event' - host a new event\n"
                 "- 'find events' - see what's happening\n"
@@ -427,23 +460,18 @@ def process_message(phone_number: str, text: str) -> str:
     if intent == "deny":
         return _handle_deny(phone_number, extracted_name)
 
-    # --- PHASE 3: Check if user needs to register first ---
+    # --- Handle accept/decline invite intents (invitee actions) ---
+    if intent == "accept_invite":
+        return _handle_accept_invite(phone_number, extracted_name)
+    if intent == "decline_invite":
+        return _handle_decline_invite(phone_number, extracted_name)
+
+    # --- PHASE 3: Auto-register unregistered users with phone as placeholder name ---
     if not user_store.is_registered(phone_number):
-        # Already in registration flow
-        if state is not None and state.get("flow_type") == "register":
-            return _handle_register_flow(phone_number, state, text_stripped)
-        # Need to start registration for any actionable intent
-        if intent in ["create_event", "create_event_ai", "edit_event", "join_event", "leave_event",
-                      "delete_event", "close_event"]:
-            state_store.start_flow(phone_number, "register")
-            # Map create_event_ai to create_event for pending flow
-            pending = "create_event" if intent == "create_event_ai" else intent
-            state_store.set_pending_flow(phone_number, pending)
-            return REGISTER_PROMPTS["get_name"]
-        # Default welcome for unregistered users
-        if state is None:
-            state_store.start_flow(phone_number, "register")
-            return REGISTER_PROMPTS["get_name"]
+        # Auto-register with phone number as placeholder name (users update via web UI)
+        user_store.register_user(phone_number, phone_number)
+        logger.info(f"Auto-registered new user: {phone_number}")
+        # Continue processing - don't interrupt their flow
 
     # --- NOT IN A FLOW: Check for intent to start a new flow ---
     if state is None:
@@ -474,6 +502,10 @@ def process_message(phone_number: str, text: str) -> str:
         return _handle_delete_flow(phone_number, state, intent, text_stripped)
     elif flow_type == "close":
         return _handle_close_flow(phone_number, state, text_stripped)
+    elif flow_type == "invite":
+        return _handle_invite_flow(phone_number, text_stripped, state)
+    elif flow_type == "view_attendees":
+        return _handle_view_attendees_flow(phone_number, state, text_stripped)
     else:
         # Unknown flow type - clear and prompt
         state_store.clear_state(phone_number)
@@ -533,6 +565,21 @@ def _handle_new_intent(phone_number: str, intent: str) -> str:
         event_list = format_hosted_events(events)
         return f"Your open events:\n\n{event_list}\n\n{CLOSE_PROMPTS['select_event']}"
 
+    elif intent == "invite_event":
+        events = event_store.get_events_by_host(phone_number)
+        if not events:
+            return "You don't have any events to invite people to. Create an event first!"
+        state_store.start_invite_flow(phone_number)
+        return "Which event would you like to invite someone to?\n\n" + format_event_list(events, show_spots=False)
+
+    elif intent == "view_attendees":
+        events = event_store.get_events_by_host(phone_number)
+        if not events:
+            return "You haven't created any events yet. Text 'create event' to get started!"
+        state_store.start_flow(phone_number, "view_attendees")
+        event_list = format_hosted_events(events)
+        return f"Your events:\n\n{event_list}\n\nWhich event would you like to view attendees for? Reply with the number."
+
     elif intent == "my_events":
         # Show hosted events and enrolled events with status
         hosted = event_store.get_events_by_host(phone_number)
@@ -543,6 +590,10 @@ def _handle_new_intent(phone_number: str, intent: str) -> str:
         if hosted:
             lines.append("Your hosted events:")
             lines.append(format_enrolled_events_with_host(hosted, is_host=True))
+            lines.append("")
+            lines.append("Reply with an event number to see who's attending.")
+            # Start view_attendees flow so user can reply with a number
+            state_store.start_flow(phone_number, "view_attendees")
         if joined:
             if hosted:
                 lines.append("")
@@ -562,7 +613,8 @@ def _handle_new_intent(phone_number: str, intent: str) -> str:
     else:
         # Default welcome message
         name = user_store.get_name(phone_number)
-        greeting = f"Hi {name}!" if name else "Hi!"
+        # Only greet by name if it's a real name (not phone placeholder)
+        greeting = f"Hi {name}!" if name and not _is_phone_placeholder(name) else "Hi!"
         return (f"{greeting} Here's what you can do:\n"
                 "- 'create event' to host a new event\n"
                 "- 'find events' to see what's happening\n"
@@ -583,6 +635,11 @@ def _handle_create_flow(phone_number: str, state: dict, intent: str, text: str) 
             # Persist the event to storage
             created_event = event_store.create_event(event_data)
             state_store.clear_state(phone_number)
+            # Different message for private vs public events
+            if created_event.get("private"):
+                return (f"Event created! Your private event '{created_event['title']}' is all set.\n\n"
+                        "Since this is a private event, people can only join if you invite them. "
+                        "Say 'invite' to start inviting friends!")
             return f"Event created! Your event '{created_event['title']}' is all set. Share it with friends!"
         else:
             # Re-show summary if they didn't confirm
@@ -600,6 +657,20 @@ def _handle_create_flow(phone_number: str, state: dict, intent: str, text: str) 
                 state_store.update_state(phone_number, "capacity", capacity_val)
             except ValueError:
                 state_store.update_state(phone_number, "capacity", text)
+        # Move to next step (private) and show prompt
+        new_state = state_store.get_state(phone_number)
+        return PROMPTS[new_state["step"]]
+
+    # Handle private step (yes/no)
+    if current_step == "private":
+        text_lower = text.lower().strip()
+        if text_lower in ["yes", "y", "private"]:
+            state_store.update_state(phone_number, "private", True)
+        elif text_lower in ["no", "n", "public"]:
+            state_store.update_state(phone_number, "private", False)
+        else:
+            # Default to False for any other input
+            state_store.update_state(phone_number, "private", False)
         # Show summary
         event = state_store.get_event_data(phone_number)
         return format_summary(event)
@@ -835,6 +906,54 @@ def _handle_delete_flow(phone_number: str, state: dict, intent: str, text: str) 
     return "Text 'cancel' to exit or try again."
 
 
+def _handle_view_attendees_flow(phone_number: str, state: dict, text: str) -> str:
+    """Handle the view attendees flow (Section 22.1)."""
+    current_step = state["step"]
+    events = event_store.get_events_by_host(phone_number)
+
+    if current_step == "select_event":
+        if not events:
+            state_store.clear_state(phone_number)
+            return "You don't have any events."
+
+        try:
+            selection = int(text)
+            if 1 <= selection <= len(events):
+                selected_event = events[selection - 1]
+                state_store.clear_state(phone_number)
+
+                # Get participants list
+                participants = selected_event.get("participants", [])
+                event_title = selected_event["title"]
+
+                if not participants:
+                    return f"No one has joined '{event_title}' yet."
+
+                # Build attendee list with names
+                attendee_lines = []
+                for participant_phone in participants:
+                    user = user_store.get_user(participant_phone)
+                    if user and user.get("name"):
+                        name = user["name"]
+                        # Check if name is a phone placeholder
+                        if _is_phone_placeholder(name):
+                            attendee_lines.append(f"- {participant_phone}")
+                        else:
+                            attendee_lines.append(f"- {name} ({participant_phone})")
+                    else:
+                        attendee_lines.append(f"- {participant_phone}")
+
+                attendee_list = "\n".join(attendee_lines)
+                total = len(participants)
+                return f"Attendees for {event_title}:\n{attendee_list}\nTotal: {total} attending"
+            else:
+                return f"Please enter a number between 1 and {len(events)}."
+        except ValueError:
+            return f"Please enter a number between 1 and {len(events)}."
+
+    return "Text 'cancel' to exit or try again."
+
+
 # --- Phase 3 Handler Functions ---
 
 def _handle_register_flow(phone_number: str, state: dict, text: str) -> str:
@@ -979,6 +1098,109 @@ def _handle_close_flow(phone_number: str, state: dict, text: str) -> str:
     return "Text 'cancel' to exit or try again."
 
 
+def _handle_invite_flow(phone_number: str, message: str, state: dict) -> str:
+    """Handle invite flow steps."""
+    step = state.get("step")
+
+    if step == "select_event":
+        # User selects event by number
+        events = event_store.get_events_by_host(phone_number)
+        try:
+            idx = int(message.strip()) - 1
+            if 0 <= idx < len(events):
+                event = events[idx]
+                state_store.set_selected_event(phone_number, event["id"])
+                state_store.set_step(phone_number, "search_user")
+                return "Enter the name of the person you'd like to invite:"
+            else:
+                return f"Please enter a number between 1 and {len(events)}."
+        except ValueError:
+            return f"Please enter a number between 1 and {len(events)}."
+
+    elif step == "search_user":
+        # User provides name to search
+        matches = user_store.find_users_by_name(message.strip())
+
+        if not matches:
+            state_store.clear_state(phone_number)
+            return f"No users found matching '{message}'. Invite cancelled."
+
+        if len(matches) == 1:
+            # Single match - send invite directly
+            user = matches[0]
+            return _send_invite(phone_number, state, user)
+
+        # Multiple matches - let user select
+        # Store search results in state
+        if phone_number in state_store._state:
+            state_store._state[phone_number]["search_results"] = matches
+        state_store.set_step(phone_number, "select_user")
+        result = "Multiple users found:\n\n"
+        for i, user in enumerate(matches, 1):
+            result += f"{i}. {user['name']} ({user['phone'][-4:]})\n"
+        result += "\nEnter a number to select, or 'cancel' to cancel:"
+        return result
+
+    elif step == "select_user":
+        # User selects from multiple matches
+        if message.strip().lower() == "cancel":
+            state_store.clear_state(phone_number)
+            return "Invite cancelled."
+
+        matches = state.get("search_results", [])
+        try:
+            idx = int(message.strip()) - 1
+            if 0 <= idx < len(matches):
+                user = matches[idx]
+                return _send_invite(phone_number, state, user)
+            else:
+                return f"Please enter a number between 1 and {len(matches)}, or 'cancel'."
+        except ValueError:
+            return f"Please enter a number between 1 and {len(matches)}, or 'cancel'."
+
+    return "Something went wrong. Please try again."
+
+
+def _send_invite(host_phone: str, state: dict, invitee: dict) -> str:
+    """Send invite to user and notify them."""
+    event_id = state.get("selected_event_id")
+    event = event_store.get_event_by_id(event_id)
+    invitee_phone = invitee["phone"]
+    invitee_name = invitee["name"]
+
+    # Check if already invited or participant
+    if event_store.has_pending_invite(event_id, invitee_phone):
+        state_store.clear_state(host_phone)
+        return f"{invitee_name} already has a pending invite to this event."
+
+    if invitee_phone in event.get("participants", []):
+        state_store.clear_state(host_phone)
+        return f"{invitee_name} is already attending this event."
+
+    if invitee_phone in event.get("invited_phones", []):
+        state_store.clear_state(host_phone)
+        return f"{invitee_name} has already been invited to this event."
+
+    # Add invite
+    event_store.add_invite(event_id, invitee_phone)
+
+    # Get host name for the invite message
+    host_name = user_store.get_name(host_phone) or "Someone"
+
+    # Send invite notification to invitee
+    invite_msg = (
+        f"{host_name} has invited you to: {event['title']}\n\n"
+        f"When: {event.get('datetime', 'TBD')}\n"
+        f"Where: {event.get('location', 'TBD')}\n"
+        f"Description: {event.get('description', 'No description')}\n\n"
+        f"Reply 'accept {event['title'][:20]}' to join or 'decline {event['title'][:20]}' to decline."
+    )
+    send_message(invitee_phone, invite_msg)
+
+    state_store.clear_state(host_phone)
+    return f"Invite sent to {invitee_name}! They'll be notified and can accept or decline."
+
+
 def _handle_approve(phone_number: str, name: Optional[str]) -> str:
     """Handle host approving a join request (Section 18.2)."""
     if not name:
@@ -1043,3 +1265,76 @@ def _handle_deny(phone_number: str, name: Optional[str]) -> str:
                 return f"Denied. {requester_name}'s request for '{event['title']}' has been declined."
 
     return f"No pending request found from '{name}'. Check spelling or they may have already been processed."
+
+
+def _handle_accept_invite(phone_number: str, event_hint: str) -> str:
+    """Handle user accepting an event invite."""
+    if not event_hint:
+        return "Please specify the event name. Example: 'accept Birthday Party'"
+
+    # Find events where this user has a pending invite
+    events = event_store.get_all_events()
+
+    # Find matching event with pending invite for this user
+    matching_events = []
+    for event in events:
+        if phone_number in event.get("pending_invites", []):
+            # Check if event title matches hint (case-insensitive partial match)
+            if event_hint.lower() in event.get("title", "").lower():
+                matching_events.append(event)
+
+    if not matching_events:
+        return "No pending invite found matching that event name. Check your invites and try again."
+
+    if len(matching_events) > 1:
+        return "Multiple matching invites found. Please be more specific with the event name."
+
+    event = matching_events[0]
+    event_id = event["id"]
+
+    # Accept the invite
+    if event_store.accept_invite(event_id, phone_number):
+        # Notify the host
+        host_phone = event.get("host_phone")
+        invitee_name = user_store.get_name(phone_number) or "Someone"
+        host_msg = f"{invitee_name} has accepted your invite to '{event['title']}'!"
+        send_message(host_phone, host_msg)
+
+        return f"You've joined '{event['title']}'! See you there."
+    else:
+        return "Something went wrong accepting the invite. Please try again."
+
+
+def _handle_decline_invite(phone_number: str, event_hint: str) -> str:
+    """Handle user declining an event invite."""
+    if not event_hint:
+        return "Please specify the event name. Example: 'decline Birthday Party'"
+
+    events = event_store.get_all_events()
+
+    matching_events = []
+    for event in events:
+        if phone_number in event.get("pending_invites", []):
+            if event_hint.lower() in event.get("title", "").lower():
+                matching_events.append(event)
+
+    if not matching_events:
+        return "No pending invite found matching that event name."
+
+    if len(matching_events) > 1:
+        return "Multiple matching invites found. Please be more specific with the event name."
+
+    event = matching_events[0]
+    event_id = event["id"]
+
+    # Decline the invite
+    if event_store.decline_invite(event_id, phone_number):
+        # Notify the host
+        host_phone = event.get("host_phone")
+        invitee_name = user_store.get_name(phone_number) or "Someone"
+        host_msg = f"{invitee_name} has declined your invite to '{event['title']}'."
+        send_message(host_phone, host_msg)
+
+        return f"You've declined the invite to '{event['title']}'."
+    else:
+        return "Something went wrong declining the invite. Please try again."

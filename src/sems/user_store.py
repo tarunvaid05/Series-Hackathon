@@ -73,3 +73,81 @@ def get_all_names(phones: List[str]) -> Dict[str, Optional[str]]:
         user = users.get(phone)
         result[phone] = user.get("name") if user else None
     return result
+
+
+def find_users_by_name(name: str) -> List[dict]:
+    """
+    Find users whose name matches (case-insensitive).
+
+    Args:
+        name: The name to search for (partial match supported)
+
+    Returns:
+        List of dicts with 'phone' and 'name' keys for matching users
+    """
+    if not name:
+        return []
+    users = _load_users()
+    search_lower = name.lower()
+    matches = []
+    for phone, user_data in users.items():
+        user_name = user_data.get("name")
+        if user_name and search_lower in user_name.lower():
+            matches.append({"phone": phone, "name": user_name})
+    return matches
+
+
+def get_user(phone: str) -> Optional[dict]:
+    """
+    Get full user object for a phone number.
+
+    Args:
+        phone: The phone number to look up
+
+    Returns:
+        Full user dict with all fields (name, registered_at, bio, image, age)
+        or None if user not found.
+
+    Schema:
+        {
+            "name": str,           # required
+            "registered_at": str,  # required (ISO timestamp)
+            "bio": str,            # optional
+            "image": str,          # optional (base64 encoded)
+            "age": int             # optional
+        }
+    """
+    users = _load_users()
+    return users.get(phone)
+
+
+def update_user(phone: str, updates: dict) -> bool:
+    """
+    Update specific fields for an existing user.
+
+    Args:
+        phone: The phone number of the user to update
+        updates: Dict of fields to update (bio, image, age, etc.)
+
+    Returns:
+        True if user exists and was updated, False if user not found.
+
+    Note:
+        - Only updates provided fields, preserves existing data
+        - Cannot update 'name' or 'registered_at' through this function
+          for safety (use register_user for initial registration)
+    """
+    if not phone or not updates:
+        return False
+
+    users = _load_users()
+
+    if phone not in users:
+        return False
+
+    # Merge updates into existing user data
+    for key, value in updates.items():
+        users[phone][key] = value
+
+    _save_users(users)
+    return True

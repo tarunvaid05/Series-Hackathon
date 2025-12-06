@@ -279,3 +279,56 @@ See you there!
 
 21 Updated Capacity Prompt
 When collecting capacity, prompt clarifies: "How many people can attend? (not including yourself, or 'skip' for no limit)"
+
+22 View Attendees Feature
+
+22.1 SEMS Messaging Command
+Users can view attendees for their hosted events via messaging.
+
+22.1.1 View Attendees Intent Triggering
+Keywords: "view attendees", "who's coming", "show attendees", "list attendees", "who joined"
+
+22.1.2 View Attendees Flow
+1. SEMS lists events hosted by the user
+2. User selects event by number
+3. SEMS displays confirmed participants with name and phone:
+   "Attendees for [Event Title]:
+   - John (+1234567890)
+   - Sarah (+0987654321)
+   Total: 2 attending"
+4. If no attendees: "No one has joined [Event Title] yet."
+
+22.2 Dashboard Attendee Display
+The web dashboard shows attendees in the "My Events" tab.
+
+22.2.1 Inline Expansion
+- Each event in My Events has an expandable section
+- Click to expand/collapse attendee list
+- Shows confirmed participants with name and phone number
+- Format: "Name (+phone)" for each attendee
+
+22.2.2 Pending Request Management
+- Dashboard displays pending join requests for each event
+- Host can approve or deny requests via dashboard buttons
+- Approve: adds user to participants, notifies both parties
+- Deny: adds user to denied list, notifies requester
+
+22.3 API Endpoints
+
+22.3.1 Approve Request
+POST /api/events/[id]/approve
+Body: { "phone": "+1234567890" }
+- Moves phone from pending_requests to participants
+- Returns updated event
+
+22.3.2 Deny Request
+POST /api/events/[id]/deny
+Body: { "phone": "+1234567890" }
+- Moves phone from pending_requests to denied_requests
+- Returns updated event
+
+22.3.3 Bulk User Lookup
+POST /api/users/lookup
+Body: { "phones": ["+1234567890", "+0987654321"] }
+- Returns mapping of phone numbers to user names
+- Format: { "+1234567890": { "name": "John" }, ... }

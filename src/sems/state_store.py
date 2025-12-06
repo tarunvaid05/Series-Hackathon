@@ -16,17 +16,19 @@ from typing import Optional, Dict, Any
 _state: Dict[str, Dict[str, Any]] = {}
 
 # Supported flow types (per Project-Requirements.txt Sections 12-15, 17, 19)
-FLOW_TYPES = ["create", "edit", "join", "leave", "delete", "close", "register"]
+FLOW_TYPES = ["create", "edit", "join", "leave", "delete", "close", "register", "invite", "view_attendees"]
 
 # Steps for each flow type
 STEPS = {
-    "create": ["title", "description", "datetime", "location", "capacity", "confirm"],
+    "create": ["title", "description", "datetime", "location", "capacity", "private", "confirm"],
     "edit": ["select_event", "select_field", "new_value"],
     "join": ["select_event"],
     "leave": ["select_event"],
     "delete": ["select_event", "confirm_delete"],
     "close": ["select_event", "confirm_groupchat"],
-    "register": ["get_name"]
+    "register": ["get_name"],
+    "invite": ["select_event", "search_user", "select_user"],
+    "view_attendees": ["select_event"]
 }
 
 
@@ -71,7 +73,8 @@ def start_flow(phone_number: str, flow_type: str = "create") -> None:
             "description": None,
             "datetime": None,
             "location": None,
-            "capacity": None
+            "capacity": None,
+            "private": None
         }
     
     _state[phone_number] = state_data
@@ -173,3 +176,24 @@ def get_pending_flow(phone: str) -> Optional[str]:
     """
     state = _state.get(phone)
     return state.get("pending_flow") if state else None
+
+
+def start_invite_flow(phone_number: str) -> dict:
+    """Initialize invite flow state.
+
+    The invite flow allows users to invite others to their events:
+    1. select_event - User selects which event to invite someone to
+    2. search_user - User provides a name to search for
+    3. select_user - User selects from search results (if multiple matches)
+
+    Returns:
+        The initialized state dict for the invite flow.
+    """
+    start_flow(phone_number, "invite")
+    state = _state[phone_number]
+    state.update({
+        "selected_event_id": None,
+        "search_results": [],
+        "selected_user_phone": None
+    })
+    return state

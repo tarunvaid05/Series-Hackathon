@@ -52,7 +52,10 @@ def create_event(event_data: dict) -> dict:
         "participants": [],
         "status": "open",
         "pending_requests": [],
-        "denied_requests": []
+        "denied_requests": [],
+        "private": event_data.get("private", False),
+        "invited_phones": [],
+        "pending_invites": []
     }
     events.append(event)
     _save_events(events)
@@ -244,7 +247,7 @@ def close_event(event_id: str) -> bool:
 
 
 def get_open_events_for_discovery(phone: str) -> List[dict]:
-    """Get events for discovery: open, not own, not full, not joined, not denied."""
+    """Get events for discovery: open, not own, not full, not joined, not denied, not private (unless invited)."""
     events = _load_events()
     discoverable = []
     for event in events:
@@ -270,6 +273,12 @@ def get_open_events_for_discovery(phone: str) -> List[dict]:
                     continue
             except (ValueError, TypeError):
                 pass  # Invalid capacity, treat as unlimited
+        # Exclude private events unless user is invited
+        if event.get("private", False):
+            invited = event.get("invited_phones", [])
+            pending = event.get("pending_invites", [])
+            if phone not in invited and phone not in pending:
+                continue
         discoverable.append(event)
     return discoverable
 
@@ -352,11 +361,156 @@ def add_simulated_days(event_id: str, days: int) -> int:
 
 def reset_simulated_time(event_id: str) -> bool:
     """Reset simulated time for an event back to 0.
-    
+
     Args:
         event_id: The event's unique ID
-        
+
     Returns:
         True if successful, False otherwise
     """
     return update_event(event_id, "simulated_days", 0)
+
+
+def add_invite(event_id: str, phone: str) -> bool:
+    """Add phone to pending_invites list if not already there and not a participant.
+
+    Args:
+        event_id: The event's unique ID
+        phone: Phone number to invite
+
+    Returns:
+        True on success, False if already invited or participant
+    """
+    events = _load_events()
+    for event in events:
+        if event.get("id") == event_id:
+            # Check if already a participant
+            if phone in event.get("participants", []):
+                return False
+            # Check if already has pending invite
+            pending_invites = event.get("pending_invites", [])
+            if phone in pending_invites:
+                return False
+            # Check if already in invited_phones (accepted previously)
+            if phone in event.get("invited_phones", []):
+                return False
+            # Add to pending invites
+            pending_invites.append(phone)
+            event["pending_invites"] = pending_invites
+            _save_events(events)
+            return True
+    return False
+
+
+def get_pending_invites(event_id: str) -> List[str]:
+    """Return list of pending invite phone numbers for the event.
+
+    Args:
+        event_id: The event's unique ID
+
+    Returns:
+        List of phone numbers with pending invites
+    """
+    event = get_event_by_id(event_id)
+    if event:
+        return event.get("pending_invites", [])
+    return []
+
+
+def accept_invite(event_id: str, phone: str) -> bool:
+    """Accept an invite: remove from pending_invites, add to participants and invited_phones.
+
+    Args:
+        event_id: The event's unique ID
+        phone: Phone number accepting the invite
+
+    Returns:
+        True on success, False if no pending invite
+    """
+    events = _load_events()
+    for event in events:
+        if event.get("id") == event_id:
+            pending_invites = event.get("pending_invites", [])
+            if phone not in pending_invites:
+                return False
+            # Remove from pending_invites
+            pending_invites.remove(phone)
+            event["pending_invites"] = pending_invites
+            # Add to participants
+            participants = event.get("participants", [])
+            if phone not in participants:
+                participants.append(phone)
+                event["participants"] = participants
+            # Add to invited_phones for tracking
+            invited_phones = event.get("invited_phones", [])
+            if phone not in invited_phones:
+                invited_phones.append(phone)
+                event["invited_phones"] = invited_phones
+            _save_events(events)
+            return True
+    return False
+
+
+def decline_invite(event_id: str, phone: str) -> bool:
+    """Decline an invite: remove from pending_invites.
+
+    Args:
+        event_id: The event's unique ID
+        phone: Phone number declining the invite
+
+    Returns:
+        True on success, False if no pending invite
+    """
+    events = _load_events()
+    for event in events:
+        if event.get("id") == event_id:
+            pending_invites = event.get("pending_invites", [])
+            if phone in pending_invites:
+                pending_invites.remove(phone)
+                event["pending_invites"] = pending_invites
+                _save_events(events)
+                return True
+            return False
+    return False
+
+
+def is_invited(event_id: str, phone: str) -> bool:
+    """Check if phone is in invited_phones or pending_invites.
+
+    Args:
+        event_id: The event's unique ID
+        phone: Phone number to check
+
+    Returns:
+        True if phone is invited (pending or accepted)
+    """
+    event = get_event_by_id(event_id)
+    if event:
+        return (phone in event.get("invited_phones", []) or
+                phone in event.get("pending_invites", []))
+    return False
+
+
+def has_pending_invite(event_id: str, phone: str) -> bool:
+    """Check if phone has a pending invite for the event.
+
+    Args:
+        event_id: The event's unique ID
+        phone: Phone number to check
+
+    Returns:
+        True if phone has a pending invite
+    """
+    event = get_event_by_id(event_id)
+    if event:
+        return phone in event.get("pending_invites", [])
+    return False
+
+
+def get_all_events() -> List[dict]:
+    """Return all events.
+
+    Returns:
+        List of all event dictionaries
+    """
+    return _load_events()
