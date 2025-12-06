@@ -102,10 +102,12 @@ export async function POST(
 
     // Send notification to host (per Section 18.1)
     try {
-      await sendMessage(
+      console.log(`Sending join request notification to host: ${event.host_phone}`);
+      const msgResult = await sendMessage(
         event.host_phone,
         `${requesterName} is requesting to join "${event.title}". Reply 'approve ${requesterName}' or 'deny ${requesterName}'`
       );
+      console.log('Message send result:', JSON.stringify(msgResult));
     } catch (msgError) {
       console.error('Failed to send notification to host:', msgError);
       // Don't fail the request if notification fails - the request was still submitted
