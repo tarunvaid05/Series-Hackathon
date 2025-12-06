@@ -1,6 +1,6 @@
 "use client"
 
-import { useState } from "react"
+import { useState, useEffect, useCallback } from "react"
 import { useRouter } from "next/navigation"
 import { Menu } from "lucide-react"
 import CreateEventModal from "./create-event-modal"
@@ -21,72 +21,82 @@ interface Event {
 interface EventDashboardProps {
   sidebarOpen: boolean
   onMenuClick: () => void
+  userPhone: string
 }
 
-export default function EventDashboard({ sidebarOpen, onMenuClick }: EventDashboardProps) {
+export default function EventDashboard({ sidebarOpen, onMenuClick, userPhone }: EventDashboardProps) {
   const router = useRouter()
   const [activeTab, setActiveTab] = useState<"create" | "find" | "edit" | "delete">("find")
   const [showCreateModal, setShowCreateModal] = useState(false)
   const [showEditModal, setShowEditModal] = useState(false)
   const [editingEvent, setEditingEvent] = useState<Event | null>(null)
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState<string | null>(null)
 
-  const [events, setEvents] = useState<Event[]>([
-    {
-      id: "1",
-      host_phone: "+15551234567",
-      title: "Summer Music Festival",
-      description: "Join us for an amazing summer music festival!",
-      datetime: "2025-12-06 12:30",
-      location: "Central Park, New York",
-      capacity: 100,
-      participants: ["+15559876543", "+15551112222"],
-      status: "open",
-    },
-    {
-      id: "2",
-      host_phone: "+15559999999",
-      title: "Tech Conference 2025",
-      description: "Latest in tech and innovation",
-      datetime: "2025-12-15 09:00",
-      location: "San Francisco Convention Center",
-      capacity: 500,
-      participants: ["+15553334444"],
-      status: "open",
-    },
-  ])
-  const [userEvents, setUserEvents] = useState<Event[]>([
-    {
-      id: "3",
-      host_phone: "+15550000000",
-      title: "Hackathon Networking",
-      description: "Connect with fellow hackers",
-      datetime: "2025-12-20 18:00",
-      location: "Downtown Tech Hub",
-      capacity: 50,
-      participants: [],
-      status: "open",
-    },
-  ])
+  const [events, setEvents] = useState<Event[]>([])
+  const [userEvents, setUserEvents] = useState<Event[]>([])
 
-  const handleCreateEvent = (eventData: Partial<Event>) => {
-    const newEvent: Event = {
-      id: Date.now().toString(),
-      host_phone: "+15550000000", // Placeholder - would come from user session
-      title: eventData.title || "",
-      description: eventData.description || "",
-      datetime: eventData.datetime || "",
-      location: eventData.location || "",
-      capacity: eventData.capacity ?? null,
-      participants: [],
-      status: "open",
+  const fetchEvents = useCallback(async () => {
+    setLoading(true)
+    setError(null)
+    try {
+      const res = await fetch('/api/events')
+      if (!res.ok) {
+        throw new Error('Failed to fetch events')
+      }
+      const data: Event[] = await res.json()
+      const mine = data.filter(e => e.host_phone === userPhone)
+      const others = data.filter(e => e.host_phone !== userPhone)
+      setUserEvents(mine)
+      setEvents(others)
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to load events')
+    } finally {
+      setLoading(false)
     }
-    setUserEvents([...userEvents, newEvent])
-    setShowCreateModal(false)
-    setActiveTab("find")
+  }, [userPhone])
+
+  useEffect(() => {
+    fetchEvents()
+  }, [fetchEvents])
+
+  const handleCreateEvent = async (eventData: Partial<Event>) => {
+    setError(null)
+    try {
+      const res = await fetch('/api/events', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          ...eventData,
+          host_phone: userPhone
+        })
+      })
+      if (!res.ok) {
+        const errorData = await res.json()
+        throw new Error(errorData.error || 'Failed to create event')
+      }
+      await fetchEvents()
+      setShowCreateModal(false)
+      setActiveTab("find")
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to create event')
+    }
   }
 
-  const handleDeleteEvent = (eventId: string) => {
-    setUserEvents(userEvents.filter((e) => e.id !== eventId))
+  const handleDeleteEvent = async (eventId: string) => {
+    setError(null)
+    try {
+      const res = await fetch(`/api/events/${eventId}`, {
+        method: 'DELETE'
+      })
+      if (!res.ok) {
+        const errorData = await res.json()
+        throw new Error(errorData.error || 'Failed to delete event')
+      }
+      await fetchEvents()
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to delete event')
+    }
   }
 
   const handleEditEvent = (eventId: string) => {
@@ -97,11 +107,42 @@ export default function EventDashboard({ sidebarOpen, onMenuClick }: EventDashbo
     }
   }
 
-  const handleSaveEdit = (eventData: Partial<Event>) => {
-    if (editingEvent) {
-      setUserEvents(userEvents.map((e) => (e.id === editingEvent.id ? { ...e, ...eventData, id: e.id } : e)))
+  const handleSaveEdit = async (eventData: Partial<Event>) => {
+    if (!editingEvent) return
+    setError(null)
+    try {
+      const res = await fetch(`/api/events/${editingEvent.id}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(eventData)
+      })
+      if (!res.ok) {
+        const errorData = await res.json()
+        throw new Error(errorData.error || 'Failed to update event')
+      }
+      await fetchEvents()
       setShowEditModal(false)
       setEditingEvent(null)
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to update event')
+    }
+  }
+
+  const handleJoinEvent = async (eventId: string) => {
+    setError(null)
+    try {
+      const res = await fetch(`/api/events/${eventId}/join`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ phone: userPhone })
+      })
+      if (!res.ok) {
+        const errorData = await res.json()
+        throw new Error(errorData.error || 'Failed to join event')
+      }
+      await fetchEvents()
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to join event')
     }
   }
 
@@ -168,6 +209,12 @@ export default function EventDashboard({ sidebarOpen, onMenuClick }: EventDashbo
 
       {/* Content */}
       <div className="px-8 pb-32">
+        {error && (
+          <div className="mb-4 p-4 bg-red-50 border border-red-200 rounded-lg text-red-700">
+            {error}
+          </div>
+        )}
+
         {showCreateModal && <CreateEventModal onSubmit={handleCreateEvent} onClose={handleCancelCreate} />}
 
         {showEditModal && editingEvent && (
@@ -182,19 +229,25 @@ export default function EventDashboard({ sidebarOpen, onMenuClick }: EventDashbo
           />
         )}
 
-        {activeTab === "find" && !showCreateModal && !showEditModal && (
-          <div>
-            <EventList events={events} showJoinButton />
+        {loading && !showCreateModal && !showEditModal && (
+          <div className="text-center py-12">
+            <p className="text-muted-foreground">Loading events...</p>
           </div>
         )}
 
-        {activeTab === "edit" && !showCreateModal && !showEditModal && (
+        {!loading && activeTab === "find" && !showCreateModal && !showEditModal && (
+          <div>
+            <EventList events={events} showJoinButton onJoin={handleJoinEvent} />
+          </div>
+        )}
+
+        {!loading && activeTab === "edit" && !showCreateModal && !showEditModal && (
           <div>
             <EventList events={userEvents} showEditButton onEdit={handleEditEvent} />
           </div>
         )}
 
-        {activeTab === "delete" && !showCreateModal && !showEditModal && (
+        {!loading && activeTab === "delete" && !showCreateModal && !showEditModal && (
           <div>
             <EventList events={userEvents} showDeleteButton onDelete={handleDeleteEvent} />
           </div>
