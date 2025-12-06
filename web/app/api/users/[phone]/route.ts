@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { supabase } from '@/lib/supabase';
+import { sendMessage } from '@/lib/messaging';
 
 function validatePhoneNumber(phone: string): boolean {
   return typeof phone === 'string' && phone.startsWith('+');
@@ -72,10 +73,10 @@ export async function PUT(
       );
     }
 
-    // Check if user exists
+    // Check if user exists and get current name for welcome message detection
     const { data: existingUser, error: checkError } = await supabase
       .from('users')
-      .select('phone')
+      .select('phone, name')
       .eq('phone', phone)
       .single();
 
@@ -128,6 +129,20 @@ export async function PUT(
         { success: false, error: 'Internal server error' },
         { status: 500 }
       );
+    }
+
+    // Send welcome SMS if this is first-time name setup (changing from default 'User')
+    const isFirstTimeNameSet = existingUser.name === 'User' && body.name && body.name !== 'User';
+    if (isFirstTimeNameSet) {
+      try {
+        const welcomeMessage = `Welcome to Series Events, ${body.name}! To see what you can do, text "menu". You can text "cancel" anytime to exit any conversation.`;
+        console.log(`Sending welcome SMS to ${phone}`);
+        await sendMessage(phone, welcomeMessage);
+        console.log('Welcome SMS sent successfully');
+      } catch (msgError) {
+        console.error('Failed to send welcome SMS:', msgError);
+        // Don't fail the request if welcome message fails
+      }
     }
 
     return NextResponse.json({
