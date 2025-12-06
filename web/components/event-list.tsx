@@ -85,7 +85,7 @@ export default function EventList({
               <span>{capacityDisplay}</span>
             </div>
           </div>
-          <div className="ml-4">
+          <div className="ml-4 flex gap-2">
             {showJoinButton && (
               <button
                 onClick={() => onJoin?.(event.id)}
@@ -105,7 +105,7 @@ export default function EventList({
             {showDeleteButton && onDelete && (
               <button
                 onClick={() => onDelete(event.id)}
-                className="bg-black hover:bg-gray-800 text-white px-4 py-2 rounded-lg text-sm font-medium transition-colors"
+                className="bg-red-600 hover:bg-red-700 text-white px-4 py-2 rounded-lg text-sm font-medium transition-colors"
               >
                 Delete
               </button>

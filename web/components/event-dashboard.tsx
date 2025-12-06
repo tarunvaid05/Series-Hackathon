@@ -26,7 +26,7 @@ interface EventDashboardProps {
 
 export default function EventDashboard({ sidebarOpen, onMenuClick, userPhone }: EventDashboardProps) {
   const router = useRouter()
-  const [activeTab, setActiveTab] = useState<"create" | "find" | "edit" | "delete">("find")
+  const [activeTab, setActiveTab] = useState<"create" | "find" | "my-events">("find")
   const [showCreateModal, setShowCreateModal] = useState(false)
   const [showEditModal, setShowEditModal] = useState(false)
   const [editingEvent, setEditingEvent] = useState<Event | null>(null)
@@ -189,20 +189,12 @@ export default function EventDashboard({ sidebarOpen, onMenuClick, userPhone }: 
             Find Events
           </button>
           <button
-            onClick={() => setActiveTab("edit")}
+            onClick={() => setActiveTab("my-events")}
             className={`flex-1 py-3 text-sm font-medium transition-colors ${
-              activeTab === "edit" ? "text-black border-b-2 border-black" : "text-gray-500 hover:text-gray-700"
+              activeTab === "my-events" ? "text-black border-b-2 border-black" : "text-gray-500 hover:text-gray-700"
             }`}
           >
-            Edit Your Events
-          </button>
-          <button
-            onClick={() => setActiveTab("delete")}
-            className={`flex-1 py-3 text-sm font-medium transition-colors ${
-              activeTab === "delete" ? "text-black border-b-2 border-black" : "text-gray-500 hover:text-gray-700"
-            }`}
-          >
-            Delete Your Events
+            My Events
           </button>
         </div>
       </div>
@@ -241,15 +233,15 @@ export default function EventDashboard({ sidebarOpen, onMenuClick, userPhone }: 
           </div>
         )}
 
-        {!loading && activeTab === "edit" && !showCreateModal && !showEditModal && (
+        {!loading && activeTab === "my-events" && !showCreateModal && !showEditModal && (
           <div>
-            <EventList events={userEvents} showEditButton onEdit={handleEditEvent} />
-          </div>
-        )}
-
-        {!loading && activeTab === "delete" && !showCreateModal && !showEditModal && (
-          <div>
-            <EventList events={userEvents} showDeleteButton onDelete={handleDeleteEvent} />
+            <EventList
+              events={userEvents}
+              showEditButton
+              showDeleteButton
+              onEdit={handleEditEvent}
+              onDelete={handleDeleteEvent}
+            />
           </div>
         )}
       </div>
