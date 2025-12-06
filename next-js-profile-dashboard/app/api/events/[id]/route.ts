@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import fs from 'fs';
 import path from 'path';
+import { notifyParticipants } from '@/lib/messaging';
 
 const DATA_DIR = path.join(process.cwd(), '..', 'data');
 const EVENTS_FILE = path.join(DATA_DIR, 'events.json');
@@ -89,7 +90,19 @@ export async function PUT(
     events[eventIndex] = { ...events[eventIndex], ...updates };
     writeEvents(events);
 
-    return NextResponse.json(events[eventIndex]);
+    const updatedEvent = events[eventIndex];
+
+    // Notify participants about the update (non-blocking)
+    if (updatedEvent.participants && updatedEvent.participants.length > 0) {
+      notifyParticipants(
+        updatedEvent.participants,
+        `Event "${updatedEvent.title}" has been updated. Check the new details!`
+      ).catch(error => {
+        console.error('Failed to notify participants about update:', error);
+      });
+    }
+
+    return NextResponse.json(updatedEvent);
   } catch (error) {
     console.error('Error updating event:', error);
     return NextResponse.json({ error: 'Failed to update event' }, { status: 500 });
@@ -108,6 +121,18 @@ export async function DELETE(
 
     if (eventIndex === -1) {
       return NextResponse.json({ error: 'Event not found' }, { status: 404 });
+    }
+
+    const eventToDelete = events[eventIndex];
+
+    // Notify participants about cancellation (non-blocking)
+    if (eventToDelete.participants && eventToDelete.participants.length > 0) {
+      notifyParticipants(
+        eventToDelete.participants,
+        `Event "${eventToDelete.title}" has been cancelled by the host.`
+      ).catch(error => {
+        console.error('Failed to notify participants about cancellation:', error);
+      });
     }
 
     events.splice(eventIndex, 1);
