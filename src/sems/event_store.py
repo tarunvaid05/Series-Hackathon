@@ -39,7 +39,7 @@ def _save_events(events: List[dict]) -> None:
 
 
 def create_event(event_data: dict) -> dict:
-    """Add UUID, empty participants list, save, return event."""
+    """Add UUID, empty participants list, Phase 3 fields, save, return event."""
     events = _load_events()
     event = {
         "id": str(uuid.uuid4()),
@@ -49,7 +49,10 @@ def create_event(event_data: dict) -> dict:
         "datetime": event_data.get("datetime"),
         "location": event_data.get("location"),
         "capacity": event_data.get("capacity"),
-        "participants": []
+        "participants": [],
+        "status": "open",
+        "pending_requests": [],
+        "denied_requests": []
     }
     events.append(event)
     _save_events(events)
@@ -63,22 +66,32 @@ def get_events_by_host(phone: str) -> List[dict]:
 
 
 def get_joinable_events(phone: str) -> List[dict]:
-    """Get events user can join: exclude own events, full capacity, already joined."""
+    """Get events user can join: exclude own, full, joined, closed, denied."""
     events = _load_events()
     joinable = []
     for event in events:
         # Exclude own events
         if event.get("host_phone") == phone:
             continue
+        # Exclude closed events (Phase 3)
+        if event.get("status") != "open":
+            continue
         # Exclude already joined
         if phone in event.get("participants", []):
+            continue
+        # Exclude denied requests (Phase 3)
+        if phone in event.get("denied_requests", []):
             continue
         # Exclude full capacity events
         capacity = event.get("capacity")
         if capacity is not None:
-            current_count = len(event.get("participants", []))
-            if current_count >= capacity:
-                continue
+            try:
+                capacity_int = int(capacity)
+                current_count = len(event.get("participants", []))
+                if current_count >= capacity_int:
+                    continue
+            except (ValueError, TypeError):
+                pass  # Invalid capacity, treat as unlimited
         joinable.append(event)
     return joinable
 
@@ -134,8 +147,13 @@ def join_event(event_id: str, phone: str) -> bool:
                 return False
             # Cannot join if at capacity
             capacity = event.get("capacity")
-            if capacity is not None and len(participants) >= capacity:
-                return False
+            if capacity is not None:
+                try:
+                    capacity_int = int(capacity)
+                    if len(participants) >= capacity_int:
+                        return False
+                except (ValueError, TypeError):
+                    pass  # Invalid capacity, treat as unlimited
             # Add participant
             participants.append(phone)
             event["participants"] = participants
@@ -157,3 +175,100 @@ def leave_event(event_id: str, phone: str) -> bool:
                 return True
             return False
     return False
+
+
+def add_pending_request(event_id: str, phone: str) -> bool:
+    """Add phone to pending_requests list for event."""
+    events = _load_events()
+    for event in events:
+        if event.get("id") == event_id:
+            pending = event.get("pending_requests", [])
+            if phone not in pending:
+                pending.append(phone)
+                event["pending_requests"] = pending
+                _save_events(events)
+                return True
+            return False
+    return False
+
+
+def remove_pending_request(event_id: str, phone: str) -> bool:
+    """Remove phone from pending_requests list for event."""
+    events = _load_events()
+    for event in events:
+        if event.get("id") == event_id:
+            pending = event.get("pending_requests", [])
+            if phone in pending:
+                pending.remove(phone)
+                event["pending_requests"] = pending
+                _save_events(events)
+                return True
+            return False
+    return False
+
+
+def add_denied_request(event_id: str, phone: str) -> bool:
+    """Add phone to denied_requests list for event."""
+    events = _load_events()
+    for event in events:
+        if event.get("id") == event_id:
+            denied = event.get("denied_requests", [])
+            if phone not in denied:
+                denied.append(phone)
+                event["denied_requests"] = denied
+                _save_events(events)
+                return True
+            return False
+    return False
+
+
+def is_request_pending(event_id: str, phone: str) -> bool:
+    """Check if phone has a pending request for event."""
+    event = get_event_by_id(event_id)
+    if event:
+        return phone in event.get("pending_requests", [])
+    return False
+
+
+def is_request_denied(event_id: str, phone: str) -> bool:
+    """Check if phone was denied for event."""
+    event = get_event_by_id(event_id)
+    if event:
+        return phone in event.get("denied_requests", [])
+    return False
+
+
+def close_event(event_id: str) -> bool:
+    """Set event status to closed."""
+    return update_event(event_id, "status", "closed")
+
+
+def get_open_events_for_discovery(phone: str) -> List[dict]:
+    """Get events for discovery: open, not own, not full, not joined, not denied."""
+    events = _load_events()
+    discoverable = []
+    for event in events:
+        # Must be open status
+        if event.get("status") != "open":
+            continue
+        # Exclude own events
+        if event.get("host_phone") == phone:
+            continue
+        # Exclude already joined
+        if phone in event.get("participants", []):
+            continue
+        # Exclude denied requests
+        if phone in event.get("denied_requests", []):
+            continue
+        # Exclude full capacity events
+        capacity = event.get("capacity")
+        if capacity is not None:
+            try:
+                capacity_int = int(capacity)
+                current_count = len(event.get("participants", []))
+                if current_count >= capacity_int:
+                    continue
+            except (ValueError, TypeError):
+                pass  # Invalid capacity, treat as unlimited
+        discoverable.append(event)
+    return discoverable

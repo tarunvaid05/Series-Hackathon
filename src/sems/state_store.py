@@ -2,11 +2,12 @@
 State Store Module for SEMS (Series Events Messaging System)
 
 Manages in-memory conversation state per user phone number.
-Per Project-Requirements.txt Section 3.2, Section 4, and Sections 12-15:
+Per Project-Requirements.txt Section 3.2, Section 4, Sections 12-15, and Sections 17, 19:
 - Maintain conversational state per user phone number until completion or cancellation
 - After confirmation, clear state
 - Transient in-memory storage only
 - Phase 2: Support for create, edit, join, leave, and delete flows
+- Phase 3: Support for register and close flows
 """
 
 from typing import Optional, Dict, Any
@@ -14,8 +15,8 @@ from typing import Optional, Dict, Any
 # In-memory state storage: phone_number -> conversation state
 _state: Dict[str, Dict[str, Any]] = {}
 
-# Supported flow types for Phase 2 (per Project-Requirements.txt Sections 12-15)
-FLOW_TYPES = ["create", "edit", "join", "leave", "delete"]
+# Supported flow types (per Project-Requirements.txt Sections 12-15, 17, 19)
+FLOW_TYPES = ["create", "edit", "join", "leave", "delete", "close", "register"]
 
 # Steps for each flow type
 STEPS = {
@@ -23,7 +24,9 @@ STEPS = {
     "edit": ["select_event", "select_field", "new_value"],
     "join": ["select_event"],
     "leave": ["select_event"],
-    "delete": ["select_event", "confirm_delete"]
+    "delete": ["select_event", "confirm_delete"],
+    "close": ["select_event", "confirm_groupchat"],
+    "register": ["get_name"]
 }
 
 
@@ -56,7 +59,8 @@ def start_flow(phone_number: str, flow_type: str = "create") -> None:
         "step": first_step,
         "flow_type": flow_type,
         "selected_event_id": None,
-        "edit_field": None
+        "edit_field": None,
+        "pending_flow": None  # Stores flow to resume after registration
     }
     
     # Add event data structure only for create flow
@@ -142,3 +146,30 @@ def set_step(phone_number: str, step: str) -> None:
     """Set the current step explicitly (useful for edit flow looping)."""
     if phone_number in _state:
         _state[phone_number]["step"] = step
+
+
+def needs_registration(phone: str) -> bool:
+    """Check if user is currently in a registration flow.
+
+    Used by intent_handler to check if user needs to complete registration first.
+    """
+    state = get_state(phone)
+    return state is not None and state.get("flow_type") == "register"
+
+
+def set_pending_flow(phone: str, flow_type: str) -> None:
+    """Store the flow the user was trying to start before registration.
+
+    This allows resuming the intended flow after registration completes.
+    """
+    if phone in _state:
+        _state[phone]["pending_flow"] = flow_type
+
+
+def get_pending_flow(phone: str) -> Optional[str]:
+    """Get the pending flow that should resume after registration.
+
+    Returns None if no pending flow or user not in state.
+    """
+    state = _state.get(phone)
+    return state.get("pending_flow") if state else None
