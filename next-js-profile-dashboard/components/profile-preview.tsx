@@ -3,6 +3,14 @@
 import { useEffect, useState } from "react"
 import ProfileCard from "./profile-card"
 import { Menu } from "lucide-react"
+import { getLoggedInPhone } from "@/lib/auth"
+
+interface UserProfile {
+  name: string
+  age?: number
+  bio?: string
+  image?: string
+}
 
 export default function ProfilePreview({
   onMenuClick,
@@ -10,19 +18,37 @@ export default function ProfilePreview({
 }: { onMenuClick: () => void; sidebarOpen: boolean }) {
   const [showAnimation, setShowAnimation] = useState(false)
   const [selectedProfile, setSelectedProfile] = useState<"me" | "friend" | null>(null)
+  const [currentUser, setCurrentUser] = useState<UserProfile>({
+    name: "User",
+    age: undefined,
+    bio: "",
+    image: "/professional-portrait-man.jpg",
+  })
 
   useEffect(() => {
     const timer = setTimeout(() => setShowAnimation(true), 300)
     return () => clearTimeout(timer)
   }, [])
 
-  const currentUser = {
-    name: "Alif Abdullah",
-    age: 20,
-    bio: "Lover of Software and AI/ML",
-    image: "/professional-portrait-man.jpg",
-    linkedinUrl: "https://www.linkedin.com/in/alif-ab",
-  }
+  // Fetch user profile from API
+  useEffect(() => {
+    const phone = getLoggedInPhone()
+    if (!phone) return
+
+    fetch(`/api/users/${encodeURIComponent(phone)}`)
+      .then(res => res.json())
+      .then(data => {
+        if (data.success && data.user) {
+          setCurrentUser({
+            name: data.user.name && !data.user.name.startsWith('+') ? data.user.name : 'User',
+            age: data.user.age,
+            bio: data.user.bio || "",
+            image: data.user.image || "/professional-portrait-man.jpg",
+          })
+        }
+      })
+      .catch(() => {})
+  }, [])
 
   const aiFriend = {
     name: "Brady",
