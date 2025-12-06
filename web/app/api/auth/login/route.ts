@@ -48,12 +48,12 @@ export async function POST(request: NextRequest) {
       });
     }
 
-    // User doesn't exist, create new user with phone as name
+    // User doesn't exist, create new user with default name "User"
     const { data: newUser, error: insertError } = await supabase
       .from('users')
       .insert({
         phone,
-        name: phone,
+        name: 'User',
         registered_at: new Date().toISOString()
       })
       .select()
@@ -70,7 +70,8 @@ export async function POST(request: NextRequest) {
     return NextResponse.json(
       {
         success: true,
-        user: newUser
+        user: newUser,
+        isNewUser: true
       },
       { status: 201 }
     );
