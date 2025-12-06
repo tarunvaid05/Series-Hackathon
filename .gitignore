@@ -62,3 +62,6 @@ playwright-tests/
 
 # Project management
 CHANGELOG.md
+
+# Data storage
+data/events.json
