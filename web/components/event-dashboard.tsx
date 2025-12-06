@@ -39,6 +39,7 @@ export default function EventDashboard({ sidebarOpen, onMenuClick, userPhone }: 
 
   const [events, setEvents] = useState<Event[]>([])
   const [userEvents, setUserEvents] = useState<Event[]>([])
+  const [joinedEvents, setJoinedEvents] = useState<Event[]>([])
   const [userNames, setUserNames] = useState<Record<string, { name: string }>>({})
   const [successMessage, setSuccessMessage] = useState<string | null>(null)
 
@@ -85,8 +86,10 @@ export default function EventDashboard({ sidebarOpen, onMenuClick, userPhone }: 
       const data: Event[] = await res.json()
       const mine = data.filter(e => e.host_phone === userPhone)
       const others = data.filter(e => e.host_phone !== userPhone)
+      const joined = data.filter(e => e.host_phone !== userPhone && e.participants?.includes(userPhone))
       setUserEvents(mine)
       setEvents(others)
+      setJoinedEvents(joined)
 
       // Fetch user names for participants and pending requests in user's events
       const phones = collectPhoneNumbers(mine)
@@ -336,17 +339,24 @@ export default function EventDashboard({ sidebarOpen, onMenuClick, userPhone }: 
         )}
 
         {!loading && activeTab === "my-events" && !showCreateModal && !showEditModal && (
-          <div>
-            <EventList
-              events={userEvents}
-              showEditButton
-              showDeleteButton
-              onEdit={handleEditEvent}
-              onDelete={handleDeleteClick}
-              onApprove={handleApproveRequest}
-              onDeny={handleDenyRequest}
-              userNames={userNames}
-            />
+          <div className="space-y-8">
+            <div>
+              <h2 className="text-lg font-semibold text-gray-900 mb-4">Events I'm Hosting</h2>
+              <EventList
+                events={userEvents}
+                showEditButton
+                showDeleteButton
+                onEdit={handleEditEvent}
+                onDelete={handleDeleteClick}
+                onApprove={handleApproveRequest}
+                onDeny={handleDenyRequest}
+                userNames={userNames}
+              />
+            </div>
+            <div>
+              <h2 className="text-lg font-semibold text-gray-900 mb-4">Joined Events</h2>
+              <EventList events={joinedEvents} />
+            </div>
           </div>
         )}
 
