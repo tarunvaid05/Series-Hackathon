@@ -50,6 +50,7 @@ env/
 node_modules/
 .next/
 *.tsbuildinfo
+!web/lib/
 
 # Environment variables
 .env

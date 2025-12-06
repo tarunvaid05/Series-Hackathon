@@ -29,6 +29,8 @@ export default function EventDashboard({ sidebarOpen, onMenuClick, userPhone }: 
   const [activeTab, setActiveTab] = useState<"create" | "find" | "my-events">("find")
   const [showCreateModal, setShowCreateModal] = useState(false)
   const [showEditModal, setShowEditModal] = useState(false)
+  const [showDeleteConfirm, setShowDeleteConfirm] = useState(false)
+  const [deletingEventId, setDeletingEventId] = useState<string | null>(null)
   const [editingEvent, setEditingEvent] = useState<Event | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
@@ -83,10 +85,16 @@ export default function EventDashboard({ sidebarOpen, onMenuClick, userPhone }: 
     }
   }
 
-  const handleDeleteEvent = async (eventId: string) => {
+  const handleDeleteClick = (eventId: string) => {
+    setDeletingEventId(eventId)
+    setShowDeleteConfirm(true)
+  }
+
+  const handleConfirmDelete = async () => {
+    if (!deletingEventId) return
     setError(null)
     try {
-      const res = await fetch(`/api/events/${eventId}`, {
+      const res = await fetch(`/api/events/${deletingEventId}`, {
         method: 'DELETE'
       })
       if (!res.ok) {
@@ -96,7 +104,15 @@ export default function EventDashboard({ sidebarOpen, onMenuClick, userPhone }: 
       await fetchEvents()
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to delete event')
+    } finally {
+      setShowDeleteConfirm(false)
+      setDeletingEventId(null)
     }
+  }
+
+  const handleCancelDelete = () => {
+    setShowDeleteConfirm(false)
+    setDeletingEventId(null)
   }
 
   const handleEditEvent = (eventId: string) => {
@@ -240,8 +256,34 @@ export default function EventDashboard({ sidebarOpen, onMenuClick, userPhone }: 
               showEditButton
               showDeleteButton
               onEdit={handleEditEvent}
-              onDelete={handleDeleteEvent}
+              onDelete={handleDeleteClick}
             />
+          </div>
+        )}
+
+        {/* Delete Confirmation Dialog */}
+        {showDeleteConfirm && (
+          <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
+            <div className="bg-white rounded-lg p-6 max-w-md w-full mx-4 shadow-xl">
+              <h3 className="text-lg font-semibold text-gray-900 mb-2">Delete Event?</h3>
+              <p className="text-gray-600 mb-6">
+                Are you sure you want to delete this event? This action cannot be undone and all participants will be notified.
+              </p>
+              <div className="flex gap-3 justify-end">
+                <button
+                  onClick={handleCancelDelete}
+                  className="px-4 py-2 text-gray-700 hover:bg-gray-100 rounded-lg font-medium transition-colors"
+                >
+                  Cancel
+                </button>
+                <button
+                  onClick={handleConfirmDelete}
+                  className="px-4 py-2 bg-red-600 hover:bg-red-700 text-white rounded-lg font-medium transition-colors"
+                >
+                  Delete
+                </button>
+              </div>
+            </div>
           </div>
         )}
       </div>
