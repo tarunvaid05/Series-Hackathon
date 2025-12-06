@@ -16,6 +16,8 @@ interface Event {
   capacity: number | null
   participants: string[]
   status: 'open' | 'closed'
+  pending_requests?: string[]
+  denied_requests?: string[]
 }
 
 interface EventDashboardProps {
@@ -37,6 +39,39 @@ export default function EventDashboard({ sidebarOpen, onMenuClick, userPhone }: 
 
   const [events, setEvents] = useState<Event[]>([])
   const [userEvents, setUserEvents] = useState<Event[]>([])
+  const [userNames, setUserNames] = useState<Record<string, { name: string }>>({})
+
+  // Collect all phone numbers from user events for lookup
+  const collectPhoneNumbers = useCallback((events: Event[]): string[] => {
+    const phones = new Set<string>()
+    for (const event of events) {
+      for (const phone of event.participants || []) {
+        phones.add(phone)
+      }
+      for (const phone of event.pending_requests || []) {
+        phones.add(phone)
+      }
+    }
+    return Array.from(phones)
+  }, [])
+
+  // Fetch user names for all participants and pending requests
+  const fetchUserNames = useCallback(async (phones: string[]) => {
+    if (phones.length === 0) return
+    try {
+      const res = await fetch('/api/users/lookup', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ phones })
+      })
+      if (res.ok) {
+        const data = await res.json()
+        setUserNames(data)
+      }
+    } catch (err) {
+      console.error('Failed to fetch user names:', err)
+    }
+  }, [])
 
   const fetchEvents = useCallback(async () => {
     setLoading(true)
@@ -51,12 +86,16 @@ export default function EventDashboard({ sidebarOpen, onMenuClick, userPhone }: 
       const others = data.filter(e => e.host_phone !== userPhone)
       setUserEvents(mine)
       setEvents(others)
+
+      // Fetch user names for participants and pending requests in user's events
+      const phones = collectPhoneNumbers(mine)
+      await fetchUserNames(phones)
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to load events')
     } finally {
       setLoading(false)
     }
-  }, [userPhone])
+  }, [userPhone, collectPhoneNumbers, fetchUserNames])
 
   useEffect(() => {
     fetchEvents()
@@ -162,6 +201,42 @@ export default function EventDashboard({ sidebarOpen, onMenuClick, userPhone }: 
     }
   }
 
+  const handleApproveRequest = async (eventId: string, phone: string) => {
+    setError(null)
+    try {
+      const res = await fetch(`/api/events/${eventId}/approve`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ phone })
+      })
+      if (!res.ok) {
+        const errorData = await res.json()
+        throw new Error(errorData.error || 'Failed to approve request')
+      }
+      await fetchEvents()
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to approve request')
+    }
+  }
+
+  const handleDenyRequest = async (eventId: string, phone: string) => {
+    setError(null)
+    try {
+      const res = await fetch(`/api/events/${eventId}/deny`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ phone })
+      })
+      if (!res.ok) {
+        const errorData = await res.json()
+        throw new Error(errorData.error || 'Failed to deny request')
+      }
+      await fetchEvents()
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to deny request')
+    }
+  }
+
   const handleCancelCreate = () => {
     setShowCreateModal(false)
     setActiveTab("find")
@@ -257,6 +332,9 @@ export default function EventDashboard({ sidebarOpen, onMenuClick, userPhone }: 
               showDeleteButton
               onEdit={handleEditEvent}
               onDelete={handleDeleteClick}
+              onApprove={handleApproveRequest}
+              onDeny={handleDenyRequest}
+              userNames={userNames}
             />
           </div>
         )}
