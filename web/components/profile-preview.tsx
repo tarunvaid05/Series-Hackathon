@@ -55,7 +55,6 @@ export default function ProfilePreview({
     age: 22,
     bio: "AI Enthusiast & Developer",
     image: "/cartoon-character-ai-assistant.jpg",
-    linkedinUrl: "https://www.linkedin.com/in/brady",
   }
 
   return (

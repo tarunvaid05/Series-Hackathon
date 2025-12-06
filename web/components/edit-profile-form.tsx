@@ -5,7 +5,7 @@ import type React from "react"
 import { useState, useEffect, useCallback } from "react"
 import { Input } from "@/components/ui/input"
 import { Textarea } from "@/components/ui/textarea"
-import { CheckCircle2, Info, Loader2 } from "lucide-react"
+import { Info, Loader2 } from "lucide-react"
 
 interface EditProfileFormProps {
   userPhone: string;
@@ -19,9 +19,6 @@ export default function EditProfileForm({ userPhone, onSuccess, onChangeDetected
     name: "",
     age: "",
     bio: "",
-    linkedinUrl: "",
-    instagramUrl: "",
-    twitterUrl: "",
   })
 
   const [initialData, setInitialData] = useState({
@@ -34,8 +31,6 @@ export default function EditProfileForm({ userPhone, onSuccess, onChangeDetected
   const [isSaving, setIsSaving] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [hasChanges, setHasChanges] = useState(false)
-  const [focusedFields, setFocusedFields] = useState<Record<string, boolean>>({})
-
   const fetchProfile = useCallback(async () => {
     if (!userPhone) return;
 
@@ -52,12 +47,7 @@ export default function EditProfileForm({ userPhone, onSuccess, onChangeDetected
           age: data.user.age?.toString() || '',
           bio: data.user.bio || '',
         }
-        setFormData({
-          ...userData,
-          linkedinUrl: "",
-          instagramUrl: "",
-          twitterUrl: "",
-        })
+        setFormData(userData)
         setInitialData(userData)
       } else {
         setError(data.error || 'Failed to load profile')
@@ -138,20 +128,6 @@ export default function EditProfileForm({ userPhone, onSuccess, onChangeDetected
     onChangeDetected?.(hasActualChanges)
   }
 
-  const handleFocus = (fieldName: string) => {
-    setFocusedFields((prev) => ({
-      ...prev,
-      [fieldName]: true,
-    }))
-  }
-
-  const handleBlur = (fieldName: string) => {
-    setFocusedFields((prev) => ({
-      ...prev,
-      [fieldName]: formData[fieldName as keyof typeof formData] !== "",
-    }))
-  }
-
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
     const success = await saveProfile()
@@ -221,93 +197,6 @@ export default function EditProfileForm({ userPhone, onSuccess, onChangeDetected
             maxLength={200}
           />
           <div className="text-right text-sm text-muted-foreground mt-2">{formData.bio.length}</div>
-        </div>
-      </div>
-
-      {/* Socials Section - LinkedIn URL now has floating label above field, SOCIALS stays on left */}
-      <div className="mb-6 flex gap-8">
-        <label className="w-24 text-sm font-medium text-foreground flex-shrink-0 pt-3">SOCIALS</label>
-        <div className="flex-1 space-y-6">
-          {/* LinkedIn - floating label */}
-          <div className="relative">
-            <label
-              htmlFor="linkedinUrl"
-              className="absolute left-4 -top-2.5 text-xs text-muted-foreground bg-background px-1"
-            >
-              LinkedIn URL (Optional)
-            </label>
-            <div className="flex gap-2">
-              <Input
-                id="linkedinUrl"
-                type="url"
-                name="linkedinUrl"
-                value={formData.linkedinUrl}
-                onChange={handleChange}
-                className="flex-1 py-3 text-blue-600"
-                placeholder="Coming soon..."
-                disabled
-              />
-              <button
-                type="button"
-                className="p-2 bg-gray-300 rounded-full flex-shrink-0 cursor-not-allowed"
-                disabled
-              >
-                <CheckCircle2 size={20} className="text-white" />
-              </button>
-            </div>
-          </div>
-
-          {/* Instagram - floating label */}
-          <div className="relative">
-            <label
-              htmlFor="instagramUrl"
-              className={`absolute left-4 transition-all duration-200 pointer-events-none ${
-                focusedFields.instagramUrl || formData.instagramUrl
-                  ? "text-xs text-muted-foreground -top-2.5 bg-background px-1"
-                  : "top-3.5 text-base text-muted-foreground"
-              }`}
-            >
-              Instagram URL
-            </label>
-            <Input
-              id="instagramUrl"
-              type="url"
-              name="instagramUrl"
-              value={formData.instagramUrl}
-              onChange={handleChange}
-              onFocus={() => handleFocus("instagramUrl")}
-              onBlur={() => handleBlur("instagramUrl")}
-              className="w-full py-3"
-              placeholder="Coming soon..."
-              disabled
-            />
-          </div>
-
-          {/* Twitter - floating label */}
-          <div className="relative">
-            <label
-              htmlFor="twitterUrl"
-              className={`absolute left-4 transition-all duration-200 pointer-events-none ${
-                focusedFields.twitterUrl || formData.twitterUrl
-                  ? "text-xs text-muted-foreground -top-2.5 bg-background px-1"
-                  : "top-3.5 text-base text-muted-foreground"
-              }`}
-            >
-              X (Twitter) URL
-            </label>
-            <Input
-              id="twitterUrl"
-              type="url"
-              name="twitterUrl"
-              value={formData.twitterUrl}
-              onChange={handleChange}
-              onFocus={() => handleFocus("twitterUrl")}
-              onBlur={() => handleBlur("twitterUrl")}
-              className="w-full py-3"
-              placeholder="Coming soon..."
-              disabled
-            />
-          </div>
         </div>
       </div>
 

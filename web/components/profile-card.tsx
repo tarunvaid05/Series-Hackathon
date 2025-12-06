@@ -1,13 +1,12 @@
 "use client"
 
-import { X, Linkedin } from "lucide-react"
+import { X } from "lucide-react"
 
 interface Profile {
   name: string
   age: number
   bio: string
   image: string
-  linkedinUrl?: string
 }
 
 interface ProfileCardProps {
@@ -57,16 +56,6 @@ export default function ProfileCard({ profile, isSelected, onClick, showCloseBut
         <h3 className="text-sm font-semibold text-gray-500 uppercase mb-2">Bio</h3>
         <p className="text-foreground text-sm leading-relaxed">{profile.bio}</p>
       </div>
-
-      {/* LinkedIn Link */}
-      {profile.linkedinUrl && (
-        <div className="flex items-center gap-2 text-blue-600 hover:text-blue-700">
-          <Linkedin size={20} />
-          <a href={profile.linkedinUrl} target="_blank" rel="noopener noreferrer" className="text-sm font-medium">
-            LinkedIn
-          </a>
-        </div>
-      )}
     </div>
   )
 }
