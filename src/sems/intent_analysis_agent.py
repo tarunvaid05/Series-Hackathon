@@ -18,7 +18,7 @@ load_dotenv(override=True)
 class IntentOutput(BaseModel):
     """Schema for intent analysis output"""
     intent: str = Field(
-        description="One of: create_event, find_event, edit_event, my_events, delete_event, no_intent"
+        description="One of: create_event, find_event, edit_event, my_events, delete_event, invite_event, no_intent"
     )
     confidence: float = Field(
         default=0.8,
@@ -74,6 +74,7 @@ CATEGORIES:
 - edit_event: User wants to EDIT/CHANGE/MODIFY/UPDATE their existing event
 - my_events: User wants to SEE events they're ATTENDING or SIGNED UP for
 - delete_event: User wants to DELETE/REMOVE/CANCEL their own event
+- invite_event: User wants to INVITE someone to an event
 - no_intent: Unclear or doesn't match any category
 
 QUICK RULES:
@@ -82,6 +83,7 @@ QUICK RULES:
 - Modification words: edit/change/modify/update -> edit_event
 - Viewing own: my events/attending/signed up for -> my_events
 - Removal words: delete/remove/cancel my event -> delete_event
+- Invitation words: invite/add people/send invite -> invite_event
 - When unclear -> no_intent
 
 Be decisive. Pick the most likely intent."""),

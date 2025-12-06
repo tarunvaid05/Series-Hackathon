@@ -73,3 +73,25 @@ def get_all_names(phones: List[str]) -> Dict[str, Optional[str]]:
         user = users.get(phone)
         result[phone] = user.get("name") if user else None
     return result
+
+
+def find_users_by_name(name: str) -> List[dict]:
+    """
+    Find users whose name matches (case-insensitive).
+
+    Args:
+        name: The name to search for (partial match supported)
+
+    Returns:
+        List of dicts with 'phone' and 'name' keys for matching users
+    """
+    if not name:
+        return []
+    users = _load_users()
+    search_lower = name.lower()
+    matches = []
+    for phone, user_data in users.items():
+        user_name = user_data.get("name")
+        if user_name and search_lower in user_name.lower():
+            matches.append({"phone": phone, "name": user_name})
+    return matches
