@@ -85,9 +85,13 @@ def get_joinable_events(phone: str) -> List[dict]:
         # Exclude full capacity events
         capacity = event.get("capacity")
         if capacity is not None:
-            current_count = len(event.get("participants", []))
-            if current_count >= capacity:
-                continue
+            try:
+                capacity_int = int(capacity)
+                current_count = len(event.get("participants", []))
+                if current_count >= capacity_int:
+                    continue
+            except (ValueError, TypeError):
+                pass  # Invalid capacity, treat as unlimited
         joinable.append(event)
     return joinable
 
@@ -143,8 +147,13 @@ def join_event(event_id: str, phone: str) -> bool:
                 return False
             # Cannot join if at capacity
             capacity = event.get("capacity")
-            if capacity is not None and len(participants) >= capacity:
-                return False
+            if capacity is not None:
+                try:
+                    capacity_int = int(capacity)
+                    if len(participants) >= capacity_int:
+                        return False
+                except (ValueError, TypeError):
+                    pass  # Invalid capacity, treat as unlimited
             # Add participant
             participants.append(phone)
             event["participants"] = participants
@@ -254,8 +263,12 @@ def get_open_events_for_discovery(phone: str) -> List[dict]:
         # Exclude full capacity events
         capacity = event.get("capacity")
         if capacity is not None:
-            current_count = len(event.get("participants", []))
-            if current_count >= capacity:
-                continue
+            try:
+                capacity_int = int(capacity)
+                current_count = len(event.get("participants", []))
+                if current_count >= capacity_int:
+                    continue
+            except (ValueError, TypeError):
+                pass  # Invalid capacity, treat as unlimited
         discoverable.append(event)
     return discoverable
