@@ -1,0 +1,64 @@
+CLAUDE.md
+AGENTS.md
+AUTONOMOUS-DEBUGGING-PROTOCOL.md
+CUSTOM_SUBAGENT_PROMPT.md
+TPM-PROTOCOL.md
+.claude/
+.serena/
+IMPORTANT-PATTERNS.md
+CURRENT-SESSION-UPDATES
+.playwright-mcp
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# Virtual environments
+venv/
+ENV/
+env/
+.venv/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS files
+.DS_Store
+
+# Environment variables
+.env
+.env.local
+
+# Skeleton files with hardcoded secrets
+consumer_skeleton.py
+producer_skeleton.py
+
+# Testing
+.pytest_cache/
+.coverage
+htmlcov/
+playwright-tests/
+
+# Project management
+CHANGELOG.md

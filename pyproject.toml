@@ -1,0 +1,20 @@
+[tool.poetry]
+name = "sems"
+version = "0.1.0"
+description = "Series Events Messaging System - SMS/iMessage event creation via Kafka"
+authors = ["Team SEMS"]
+readme = "README.md"
+packages = [{include = "sems", from = "src"}]
+
+[tool.poetry.dependencies]
+python = "^3.9"
+kafka-python = "^2.0.2"
+requests = "^2.31.0"
+python-dotenv = "^1.0.0"
+
+[tool.poetry.scripts]
+sems = "sems.main:main"
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"

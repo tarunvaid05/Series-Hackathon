@@ -1,0 +1,81 @@
+Project Requirements: Series Events Messaging System (SEMS)
+Hackathon Build – Phase 1
+version: 2025-12-05
+
+1 Overview
+The Series Events Messaging System (SEMS) enables the creation of real-world events through natural language messaging. Users communicate with a designated Series-issued phone number via SMS or iMessage to initiate and complete an event creation workflow.
+
+In Phase 1, SEMS supports basic conversational event creation only. It does not include event discovery, user signup flows, persistent storage, multi-user sharing, or group chat coordination. The goal is to validate conversational UX, message routing, and interaction flow using the provided messaging API and Kafka connectivity.
+
+2 User Management
+Phase 1 supports a single user role: end user identified solely by phone number. The system actor is the Series Events Number, representing backend processing exposed as a messaging participant.
+
+No account creation, authentication, or user roles beyond the end user are required.
+
+2.1 Message-based Interaction
+Users initiate interaction by sending free-form text to the Series Events Number. The system responds sequentially to collect required event information using scripted prompts. Interaction occurs entirely through messaging.
+
+3 Event Creation Workflow
+SEMS enables conversational event creation. When a user expresses intent to create an event, SEMS runs a guided interaction to collect the following:
+
+Event title
+Event description
+Event date/time (free-form text accepted)
+Event location
+Optional participant capacity
+
+The system summarizes collected information and asks for confirmation. Phase 1 does not require temporal parsing, geocoding, or data validation. The event may be logged or printed but persistence is not required.
+
+3.1 Intent triggering
+A workflow begins when SEMS detects keywords indicating event creation, such as “create event” or “I want to host an event”. Keyword matching is sufficient; natural language understanding is not required for Phase 1.
+
+3.2 Messaging behavior
+SEMS maintains conversational state per user phone number until completion or cancellation. After confirmation, SEMS clears state. Timeouts and abandoned conversations may be reset at system discretion.
+
+4 Event Structure
+Phase 1 maintains transient in-memory event objects for conversational flow. A minimal data model is sufficient:
+
+User phone number
+Title
+Description
+Raw date/time text
+Location
+Participant limit (nullable)
+
+No parsing, validation, editing, or deletion features are required.
+
+5 System Behaviors
+SEMS must:
+Detect creation intent
+Prompt sequentially for information
+Maintain conversational state
+Provide a summary and request confirmation
+Accept “confirm” or “restart”
+Clear state after completion
+
+If a user sends “cancel” at any point, SEMS terminates the interaction and returns to idle.
+
+Unexpected or malformed replies should be tolerated; SEMS may accept neutral input and continue.
+
+6 Messaging API Integration
+The Series messaging API delivers inbound messages to SEMS and sends system responses back to users.
+
+Phase 1 must support:
+Receiving inbound message payloads
+Extracting phone number and message body
+Sending outbound messages via the API
+Maintaining transient conversational state
+
+Kafka logging of completed events is optional.
+
+7 Non-Goals (Phase 1 Limits)
+SEMS Phase 1 does not include event publishing, event search, RSVP management, databases, identity authentication, group chats, reminders, agentic routing, recommendation logic, or any UI besides messaging.
+
+8 Usability Requirements
+SEMS must guide users conversationally. Prompts should be simple, confirmation messages should acknowledge input, and invalid input must not break progression.
+
+9 Current Date and Timing
+Phase 1 does not parse or validate dates; user-provided text is accepted as-is.
+
+10 Deployment
+Users interact solely via SMS/iMessage through the Series Events number. No installations, accounts, or web interfaces are required. SEMS may run locally or remotely as long as it interfaces with the messaging API.
