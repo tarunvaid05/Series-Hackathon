@@ -1,19 +1,17 @@
 """
 State Store Module for SEMS (Series Events Messaging System)
 
-Manages in-memory conversation state per user phone number.
+Manages Supabase-based conversation state per user phone number.
 Per Project-Requirements.txt Section 3.2, Section 4, Sections 12-15, and Sections 17, 19:
 - Maintain conversational state per user phone number until completion or cancellation
 - After confirmation, clear state
-- Transient in-memory storage only
 - Phase 2: Support for create, edit, join, leave, and delete flows
 - Phase 3: Support for register and close flows
 """
 
 from typing import Optional, Dict, Any
 
-# In-memory state storage: phone_number -> conversation state
-_state: Dict[str, Dict[str, Any]] = {}
+from sems.supabase_client import get_client
 
 # Supported flow types (per Project-Requirements.txt Sections 12-15, 17, 19)
 FLOW_TYPES = ["create", "edit", "join", "leave", "delete", "close", "register", "invite", "view_attendees"]
@@ -34,7 +32,7 @@ STEPS = {
 
 def get_state(phone_number: str) -> Optional[Dict[str, Any]]:
     """Get conversation state for a phone number, or None if not in flow.
-    
+
     Returns state dict including:
     - step: Current step in flow
     - flow_type: Which flow type (create, edit, join, leave, delete)
@@ -42,32 +40,62 @@ def get_state(phone_number: str) -> Optional[Dict[str, Any]]:
     - selected_event_id: Selected event ID (for edit/join/leave/delete flows)
     - edit_field: Field being edited (for edit flow)
     """
-    return _state.get(phone_number)
+    client = get_client()
+    response = client.table("conversation_state").select("*").eq("phone_number", phone_number).maybe_single().execute()
+
+    if not response.data:
+        return None
+
+    data = response.data
+    state = {
+        "step": data.get("step"),
+        "flow_type": data.get("flow_type"),
+        "selected_event_id": data.get("selected_event_id"),
+        "edit_field": data.get("edit_field"),
+        "pending_flow": data.get("pending_flow"),
+    }
+
+    # Add event data for create flow
+    if data.get("event_data"):
+        state["event"] = data["event_data"]
+
+    # Add search results for invite flow
+    if data.get("search_results"):
+        state["search_results"] = data["search_results"]
+
+    if data.get("selected_user_phone"):
+        state["selected_user_phone"] = data["selected_user_phone"]
+
+    return state
 
 
 def start_flow(phone_number: str, flow_type: str = "create") -> None:
     """Start a new flow for this phone number.
-    
+
     Args:
         phone_number: User's phone number
         flow_type: One of "create", "edit", "join", "leave", "delete"
     """
     if flow_type not in FLOW_TYPES:
         raise ValueError(f"Invalid flow_type: {flow_type}. Must be one of {FLOW_TYPES}")
-    
+
     first_step = STEPS[flow_type][0]
-    
+
     state_data = {
+        "phone_number": phone_number,
         "step": first_step,
         "flow_type": flow_type,
         "selected_event_id": None,
         "edit_field": None,
-        "pending_flow": None  # Stores flow to resume after registration
+        "pending_flow": None,
+        "event_data": None,
+        "search_results": None,
+        "selected_user_phone": None
     }
-    
+
     # Add event data structure only for create flow
     if flow_type == "create":
-        state_data["event"] = {
+        state_data["event_data"] = {
             "phone_number": phone_number,
             "title": None,
             "description": None,
@@ -76,79 +104,108 @@ def start_flow(phone_number: str, flow_type: str = "create") -> None:
             "capacity": None,
             "private": None
         }
-    
-    _state[phone_number] = state_data
+
+    client = get_client()
+    # Use upsert to handle both new and existing states
+    client.table("conversation_state").upsert(state_data).execute()
 
 
 def update_state(phone_number: str, field: str, value: str) -> None:
     """Update a field in the event data and advance to next step.
-    
+
     This function is primarily for the create flow where we collect event fields.
     For other flows, use set_selected_event() and set_edit_field() helpers.
     """
-    if phone_number in _state:
-        state = _state[phone_number]
-        flow_type = state.get("flow_type", "create")
-        
-        # For create flow, update the event data
-        if flow_type == "create" and "event" in state:
-            state["event"][field] = value
-        
-        # Advance to next step
-        current_step = state["step"]
-        flow_steps = STEPS[flow_type]
-        if current_step in flow_steps:
-            current_idx = flow_steps.index(current_step)
-            if current_idx < len(flow_steps) - 1:
-                state["step"] = flow_steps[current_idx + 1]
+    client = get_client()
+    response = client.table("conversation_state").select("*").eq("phone_number", phone_number).maybe_single().execute()
+
+    if not response.data:
+        return
+
+    data = response.data
+    flow_type = data.get("flow_type", "create")
+    current_step = data.get("step")
+
+    updates = {}
+
+    # For create flow, update the event data
+    if flow_type == "create":
+        event_data = data.get("event_data") or {}
+        event_data[field] = value
+        updates["event_data"] = event_data
+
+    # Advance to next step
+    flow_steps = STEPS.get(flow_type, [])
+    if current_step in flow_steps:
+        current_idx = flow_steps.index(current_step)
+        if current_idx < len(flow_steps) - 1:
+            updates["step"] = flow_steps[current_idx + 1]
+
+    if updates:
+        client.table("conversation_state").update(updates).eq("phone_number", phone_number).execute()
 
 
 def get_event_data(phone_number: str) -> Optional[Dict[str, Any]]:
     """Get the collected event data for a phone number."""
-    state = _state.get(phone_number)
-    return state["event"] if state else None
+    client = get_client()
+    response = client.table("conversation_state").select("event_data").eq("phone_number", phone_number).maybe_single().execute()
+
+    if response.data:
+        return response.data.get("event_data")
+    return None
 
 
 def clear_state(phone_number: str) -> None:
     """Clear state for a phone number (on completion or cancel)."""
-    _state.pop(phone_number, None)
+    client = get_client()
+    client.table("conversation_state").delete().eq("phone_number", phone_number).execute()
 
 
 def set_selected_event(phone_number: str, event_id: str) -> None:
     """Store the selected event ID for edit/join/leave/delete flows."""
-    if phone_number in _state:
-        _state[phone_number]["selected_event_id"] = event_id
+    client = get_client()
+    client.table("conversation_state").update({"selected_event_id": event_id}).eq("phone_number", phone_number).execute()
 
 
 def set_edit_field(phone_number: str, field: str) -> None:
     """Store the field being edited (for edit flow)."""
-    if phone_number in _state:
-        _state[phone_number]["edit_field"] = field
+    client = get_client()
+    client.table("conversation_state").update({"edit_field": field}).eq("phone_number", phone_number).execute()
 
 
 def get_current_flow_type(phone_number: str) -> Optional[str]:
     """Get the current flow type for a phone number, or None if not in flow."""
-    state = _state.get(phone_number)
-    return state.get("flow_type") if state else None
+    client = get_client()
+    response = client.table("conversation_state").select("flow_type").eq("phone_number", phone_number).maybe_single().execute()
+
+    if response.data:
+        return response.data.get("flow_type")
+    return None
 
 
 def advance_step(phone_number: str) -> None:
     """Manually advance to the next step in the current flow."""
-    if phone_number in _state:
-        state = _state[phone_number]
-        flow_type = state.get("flow_type", "create")
-        current_step = state["step"]
-        flow_steps = STEPS[flow_type]
-        if current_step in flow_steps:
-            current_idx = flow_steps.index(current_step)
-            if current_idx < len(flow_steps) - 1:
-                state["step"] = flow_steps[current_idx + 1]
+    client = get_client()
+    response = client.table("conversation_state").select("step, flow_type").eq("phone_number", phone_number).maybe_single().execute()
+
+    if not response.data:
+        return
+
+    flow_type = response.data.get("flow_type", "create")
+    current_step = response.data.get("step")
+    flow_steps = STEPS.get(flow_type, [])
+
+    if current_step in flow_steps:
+        current_idx = flow_steps.index(current_step)
+        if current_idx < len(flow_steps) - 1:
+            new_step = flow_steps[current_idx + 1]
+            client.table("conversation_state").update({"step": new_step}).eq("phone_number", phone_number).execute()
 
 
 def set_step(phone_number: str, step: str) -> None:
     """Set the current step explicitly (useful for edit flow looping)."""
-    if phone_number in _state:
-        _state[phone_number]["step"] = step
+    client = get_client()
+    client.table("conversation_state").update({"step": step}).eq("phone_number", phone_number).execute()
 
 
 def needs_registration(phone: str) -> bool:
@@ -165,8 +222,8 @@ def set_pending_flow(phone: str, flow_type: str) -> None:
 
     This allows resuming the intended flow after registration completes.
     """
-    if phone in _state:
-        _state[phone]["pending_flow"] = flow_type
+    client = get_client()
+    client.table("conversation_state").update({"pending_flow": flow_type}).eq("phone_number", phone).execute()
 
 
 def get_pending_flow(phone: str) -> Optional[str]:
@@ -174,8 +231,12 @@ def get_pending_flow(phone: str) -> Optional[str]:
 
     Returns None if no pending flow or user not in state.
     """
-    state = _state.get(phone)
-    return state.get("pending_flow") if state else None
+    client = get_client()
+    response = client.table("conversation_state").select("pending_flow").eq("phone_number", phone).maybe_single().execute()
+
+    if response.data:
+        return response.data.get("pending_flow")
+    return None
 
 
 def start_invite_flow(phone_number: str) -> dict:
@@ -190,10 +251,12 @@ def start_invite_flow(phone_number: str) -> dict:
         The initialized state dict for the invite flow.
     """
     start_flow(phone_number, "invite")
-    state = _state[phone_number]
-    state.update({
+
+    client = get_client()
+    client.table("conversation_state").update({
         "selected_event_id": None,
         "search_results": [],
         "selected_user_phone": None
-    })
-    return state
+    }).eq("phone_number", phone_number).execute()
+
+    return get_state(phone_number) or {}
