@@ -14,6 +14,9 @@ from typing import Dict, List, Optional
 
 from sems.supabase_client import get_client
 
+# Simple in-memory cache for user names to reduce Supabase calls
+_name_cache: Dict[str, str] = {}
+
 
 def is_registered(phone: str) -> bool:
     """Check if phone has name registered."""
@@ -29,12 +32,19 @@ def is_registered(phone: str) -> bool:
 
 
 def get_name(phone: str) -> Optional[str]:
-    """Get name for phone, None if not registered."""
+    """Get name for phone, None if not registered. Uses cache to reduce DB calls."""
+    # Check cache first
+    if phone in _name_cache:
+        return _name_cache[phone]
+
     try:
         client = get_client()
         response = client.table("users").select("name").eq("phone", phone).maybe_single().execute()
         if response and response.data:
-            return response.data.get("name")
+            name = response.data.get("name")
+            if name:
+                _name_cache[phone] = name  # Cache the result
+            return name
         return None
     except Exception as e:
         logging.error(f"Supabase error in get_name: {e}")
@@ -54,27 +64,47 @@ def register_user(phone: str, name: str) -> bool:
         }
         # Use upsert to handle both insert and update cases
         response = client.table("users").upsert(user_data).execute()
-        return response and response.data is not None and len(response.data) > 0
+        success = response and response.data is not None and len(response.data) > 0
+        if success:
+            _name_cache[phone] = name  # Update cache on successful registration
+        return success
     except Exception as e:
         logging.error(f"Supabase error in register_user: {e}")
         return False
 
 
 def get_all_names(phones: List[str]) -> Dict[str, Optional[str]]:
-    """Get names for multiple phones (for group chat). Returns dict of phone -> name."""
+    """Get names for multiple phones (for group chat). Returns dict of phone -> name. Uses cache."""
     if not phones:
         return {}
-    try:
-        client = get_client()
-        response = client.table("users").select("phone, name").in_("phone", phones).execute()
-        result = {phone: None for phone in phones}
-        if response and response.data:
-            for user in response.data:
-                result[user["phone"]] = user.get("name")
-        return result
-    except Exception as e:
-        logging.error(f"Supabase error in get_all_names: {e}")
-        return {phone: None for phone in phones}
+
+    result = {}
+    uncached_phones = []
+
+    # Check cache first
+    for phone in phones:
+        if phone in _name_cache:
+            result[phone] = _name_cache[phone]
+        else:
+            uncached_phones.append(phone)
+            result[phone] = None  # Default to None
+
+    # Only query for uncached phones
+    if uncached_phones:
+        try:
+            client = get_client()
+            response = client.table("users").select("phone, name").in_("phone", uncached_phones).execute()
+            if response and response.data:
+                for user in response.data:
+                    name = user.get("name")
+                    phone = user["phone"]
+                    result[phone] = name
+                    if name:
+                        _name_cache[phone] = name  # Update cache
+        except Exception as e:
+            logging.error(f"Supabase error in get_all_names: {e}")
+
+    return result
 
 
 def find_users_by_name(name: str) -> List[dict]:
