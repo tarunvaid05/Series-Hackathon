@@ -272,3 +272,91 @@ def get_open_events_for_discovery(phone: str) -> List[dict]:
                 pass  # Invalid capacity, treat as unlimited
         discoverable.append(event)
     return discoverable
+
+
+def set_group_chat_id(event_id: str, chat_id: int) -> bool:
+    """Set the group_chat_id for an event.
+
+    Args:
+        event_id: The event's unique ID
+        chat_id: The chat ID from the messaging API
+
+    Returns:
+        True if successful, False otherwise
+    """
+    return update_event(event_id, "group_chat_id", chat_id)
+
+
+def get_event_by_group_chat_id(chat_id: int) -> Optional[dict]:
+    """Find an event by its group_chat_id.
+
+    When multiple events share the same group_chat_id (due to API reusing
+    existing chats with same participants), returns the most recently
+    closed event.
+
+    Args:
+        chat_id: The group chat ID to search for
+
+    Returns:
+        The event dict if found, None otherwise
+    """
+    events = _load_events()
+    matching_events = [e for e in events if e.get("group_chat_id") == chat_id]
+    
+    if not matching_events:
+        return None
+    
+    if len(matching_events) == 1:
+        return matching_events[0]
+    
+    # Multiple events share this chat_id - return the most recently closed one
+    # Events are appended in order, so last one is most recent
+    return matching_events[-1]
+
+
+def get_simulated_days(event_id: str) -> int:
+    """Get the cumulative simulated days passed for an event.
+    
+    Args:
+        event_id: The event's unique ID
+        
+    Returns:
+        Number of simulated days passed, defaults to 0
+    """
+    event = get_event_by_id(event_id)
+    if event:
+        return event.get("simulated_days", 0)
+    return 0
+
+
+def add_simulated_days(event_id: str, days: int) -> int:
+    """Add days to the simulated time for an event.
+    
+    Args:
+        event_id: The event's unique ID
+        days: Number of days to add
+        
+    Returns:
+        New total simulated days
+    """
+    events = _load_events()
+    for event in events:
+        if event.get("id") == event_id:
+            current = event.get("simulated_days", 0)
+            new_total = current + days
+            event["simulated_days"] = new_total
+            _save_events(events)
+            return new_total
+    return 0
+
+
+def reset_simulated_time(event_id: str) -> bool:
+    """Reset simulated time for an event back to 0.
+    
+    Args:
+        event_id: The event's unique ID
+        
+    Returns:
+        True if successful, False otherwise
+    """
+    return update_event(event_id, "simulated_days", 0)
