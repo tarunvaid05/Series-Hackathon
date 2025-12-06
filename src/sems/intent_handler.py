@@ -1,8 +1,9 @@
 """Intent detection and conversational flow logic for SEMS."""
 
-from typing import List
+from typing import List, Optional, Tuple
 
-from sems import state_store, event_store
+from sems import state_store, event_store, user_store
+from sems.messaging_client import send_message, create_group_chat
 
 # Intent keywords (Section 3.1: keyword matching is sufficient)
 CREATE_INTENTS = ["create event", "new event", "host an event", "make an event", "schedule an event", "plan an event"]
@@ -17,13 +18,18 @@ JOIN_INTENTS = ["find events", "what's happening", "events near", "join event", 
 LEAVE_INTENTS = ["leave event", "cancel rsvp", "drop out", "quit event"]
 DELETE_INTENTS = ["delete event", "remove event", "delete my event"]
 
+# Phase 3 intent keywords (Sections 17-21)
+CLOSE_INTENTS = ["close event", "close registration", "stop registration"]
+APPROVE_PATTERN = "approve "  # "approve John"
+DENY_PATTERN = "deny "  # "deny John"
+
 # Prompts for create flow steps
 PROMPTS = {
     "title": "What's the title of your event?",
     "description": "Got it! Now give me a brief description of the event.",
     "datetime": "When is this event? (date and time)",
     "location": "Where will it be held?",
-    "capacity": "How many people can attend? (or say 'skip' for no limit)",
+    "capacity": "How many people can attend? (not including yourself, or 'skip' for no limit)",
     "confirm": None  # Special handling - shows summary
 }
 
@@ -44,6 +50,15 @@ DELETE_PROMPTS = {
     "confirm_delete": "Are you sure you want to delete '{title}'? Reply 'yes' to confirm."
 }
 
+# Phase 3 flow prompts (Sections 17-21)
+REGISTER_PROMPTS = {
+    "get_name": "Welcome to SEMS! What's your name?"
+}
+CLOSE_PROMPTS = {
+    "select_event": "Which event would you like to close? Reply with the number.",
+    "confirm_groupchat": "Would you like to create a group chat with all participants? (yes/no)"
+}
+
 # Field name mapping for edit flow
 EDIT_FIELDS = {
     "1": "title",
@@ -61,11 +76,13 @@ FIELD_DISPLAY_NAMES = {
 }
 
 
-def detect_intent(text: str) -> str:
+def detect_intent(text: str) -> Tuple[str, Optional[str]]:
     """
     Detect the intent from user message.
-    Returns: "create_event", "edit_event", "join_event", "leave_event", "delete_event",
-             "cancel", "restart", "confirm", "skip", or "input"
+    Returns: Tuple of (intent, extracted_name)
+        - intent: "create_event", "edit_event", "join_event", "leave_event", "delete_event",
+                  "close_event", "approve", "deny", "cancel", "restart", "confirm", "skip", or "input"
+        - extracted_name: Name extracted from approve/deny commands, or None
 
     IMPORTANT: Check longer phrases first to avoid conflicts.
     DELETE_INTENTS checked before CANCEL_KEYWORDS to prevent "delete event" matching "cancel".
@@ -75,50 +92,65 @@ def detect_intent(text: str) -> str:
     # Check for restart first
     for keyword in RESTART_KEYWORDS:
         if keyword in text_lower:
-            return "restart"
+            return ("restart", None)
 
     # Check DELETE_INTENTS before cancel to avoid "delete event" matching "cancel"
     for phrase in DELETE_INTENTS:
         if phrase in text_lower:
-            return "delete_event"
+            return ("delete_event", None)
 
     # Check for cancel (can happen anytime)
     for keyword in CANCEL_KEYWORDS:
         if keyword in text_lower:
-            return "cancel"
+            return ("cancel", None)
 
     # Check for create event intent
     for phrase in CREATE_INTENTS:
         if phrase in text_lower:
-            return "create_event"
+            return ("create_event", None)
 
     # Check for edit event intent
     for phrase in EDIT_INTENTS:
         if phrase in text_lower:
-            return "edit_event"
+            return ("edit_event", None)
+
+    # Check for close event intent (Phase 3)
+    for phrase in CLOSE_INTENTS:
+        if phrase in text_lower:
+            return ("close_event", None)
+
+    # Check for approve pattern (Phase 3) - "approve John"
+    if text_lower.startswith(APPROVE_PATTERN):
+        name = text[len(APPROVE_PATTERN):].strip()
+        return ("approve", name if name else None)
+
+    # Check for deny pattern (Phase 3) - "deny John"
+    if text_lower.startswith(DENY_PATTERN):
+        name = text[len(DENY_PATTERN):].strip()
+        return ("deny", name if name else None)
 
     # Check for join/discover event intent
     for phrase in JOIN_INTENTS:
         if phrase in text_lower:
-            return "join_event"
+            return ("join_event", None)
 
     # Check for leave event intent
     for phrase in LEAVE_INTENTS:
         if phrase in text_lower:
-            return "leave_event"
+            return ("leave_event", None)
 
     # Check for confirm
     for keyword in CONFIRM_KEYWORDS:
         if text_lower == keyword or text_lower.startswith(keyword):
-            return "confirm"
+            return ("confirm", None)
 
     # Check for skip
     for keyword in SKIP_KEYWORDS:
         if text_lower == keyword:
-            return "skip"
+            return ("skip", None)
 
     # Default: treat as input for current step
-    return "input"
+    return ("input", None)
 
 
 def format_summary(event: dict) -> str:
@@ -223,10 +255,10 @@ def process_message(phone_number: str, text: str) -> str:
     """
     Process an incoming message and return the response.
 
-    This is the main flow logic per Project-Requirements.txt Sections 3, 5, and 12-16.
-    Handles create, edit, join, leave, and delete flows.
+    This is the main flow logic per Project-Requirements.txt Sections 3, 5, 12-16, and 17-21.
+    Handles create, edit, join, leave, delete, register, close, approve, and deny flows.
     """
-    intent = detect_intent(text)
+    intent, extracted_name = detect_intent(text)
     state = state_store.get_state(phone_number)
     text_stripped = text.strip()
 
@@ -238,8 +270,35 @@ def process_message(phone_number: str, text: str) -> str:
     # Handle restart - clears state and starts create flow
     if intent == "restart":
         state_store.clear_state(phone_number)
+        # Check registration before starting create flow
+        if not user_store.is_registered(phone_number):
+            state_store.start_flow(phone_number, "register")
+            state_store.set_pending_flow(phone_number, "create_event")
+            return REGISTER_PROMPTS["get_name"]
         state_store.start_flow(phone_number, "create")
         return PROMPTS["title"]
+
+    # --- PHASE 3: Handle approve/deny intents (host actions) ---
+    if intent == "approve":
+        return _handle_approve(phone_number, extracted_name)
+    if intent == "deny":
+        return _handle_deny(phone_number, extracted_name)
+
+    # --- PHASE 3: Check if user needs to register first ---
+    if not user_store.is_registered(phone_number):
+        # Already in registration flow
+        if state is not None and state.get("flow_type") == "register":
+            return _handle_register_flow(phone_number, state, text_stripped)
+        # Need to start registration for any actionable intent
+        if intent in ["create_event", "edit_event", "join_event", "leave_event",
+                      "delete_event", "close_event"]:
+            state_store.start_flow(phone_number, "register")
+            state_store.set_pending_flow(phone_number, intent)
+            return REGISTER_PROMPTS["get_name"]
+        # Default welcome for unregistered users
+        if state is None:
+            state_store.start_flow(phone_number, "register")
+            return REGISTER_PROMPTS["get_name"]
 
     # --- NOT IN A FLOW: Check for intent to start a new flow ---
     if state is None:
@@ -248,7 +307,9 @@ def process_message(phone_number: str, text: str) -> str:
     # --- IN A FLOW: Route to appropriate flow handler ---
     flow_type = state.get("flow_type", "create")
 
-    if flow_type == "create":
+    if flow_type == "register":
+        return _handle_register_flow(phone_number, state, text_stripped)
+    elif flow_type == "create":
         return _handle_create_flow(phone_number, state, intent, text_stripped)
     elif flow_type == "edit":
         return _handle_edit_flow(phone_number, state, intent, text_stripped)
@@ -258,6 +319,8 @@ def process_message(phone_number: str, text: str) -> str:
         return _handle_leave_flow(phone_number, state, text_stripped)
     elif flow_type == "delete":
         return _handle_delete_flow(phone_number, state, intent, text_stripped)
+    elif flow_type == "close":
+        return _handle_close_flow(phone_number, state, text_stripped)
     else:
         # Unknown flow type - clear and prompt
         state_store.clear_state(phone_number)
@@ -280,7 +343,7 @@ def _handle_new_intent(phone_number: str, intent: str) -> str:
         return f"Your events:\n\n{event_list}\n\n{EDIT_PROMPTS['select_event']}"
 
     elif intent == "join_event":
-        events = event_store.get_joinable_events(phone_number)
+        events = event_store.get_open_events_for_discovery(phone_number)
         if not events:
             return "No events available to join right now. Check back later or text 'create event' to host your own!"
         state_store.start_flow(phone_number, "join")
@@ -303,12 +366,25 @@ def _handle_new_intent(phone_number: str, intent: str) -> str:
         event_list = format_hosted_events(events)
         return f"Your events:\n\n{event_list}\n\n{DELETE_PROMPTS['select_event']}"
 
+    elif intent == "close_event":
+        # Phase 3: Close event flow - only show open events
+        events = [e for e in event_store.get_events_by_host(phone_number)
+                  if e.get("status") == "open"]
+        if not events:
+            return "You don't have any open events to close. Text 'create event' to host one!"
+        state_store.start_flow(phone_number, "close")
+        event_list = format_hosted_events(events)
+        return f"Your open events:\n\n{event_list}\n\n{CLOSE_PROMPTS['select_event']}"
+
     else:
         # Default welcome message
-        return ("Hi! Here's what you can do:\n"
+        name = user_store.get_name(phone_number)
+        greeting = f"Hi {name}!" if name else "Hi!"
+        return (f"{greeting} Here's what you can do:\n"
                 "- 'create event' to host a new event\n"
                 "- 'find events' to see what's happening\n"
                 "- 'edit event' to modify your events\n"
+                "- 'close event' to finalize your event\n"
                 "- 'delete event' to remove your events")
 
 
@@ -440,11 +516,12 @@ def _handle_edit_flow(phone_number: str, state: dict, intent: str, text: str) ->
 
 
 def _handle_join_flow(phone_number: str, state: dict, text: str) -> str:
-    """Handle the join event flow (Section 13)."""
+    """Handle the join event flow (Section 18 - Phase 3 request-based joining)."""
     current_step = state["step"]
 
     if current_step == "select_event":
-        events = event_store.get_joinable_events(phone_number)
+        # Use discovery function that excludes pending/denied requests
+        events = event_store.get_open_events_for_discovery(phone_number)
 
         if not events:
             state_store.clear_state(phone_number)
@@ -454,23 +531,31 @@ def _handle_join_flow(phone_number: str, state: dict, text: str) -> str:
             selection = int(text)
             if 1 <= selection <= len(events):
                 selected_event = events[selection - 1]
-                success = event_store.join_event(selected_event["id"], phone_number)
+                event_id = selected_event["id"]
                 state_store.clear_state(phone_number)
 
-                if success:
-                    # Get updated event to show spots
-                    updated_event = event_store.get_event_by_id(selected_event["id"])
-                    participants = updated_event.get("participants", [])
-                    capacity = updated_event.get("capacity")
+                # Check if already has pending request
+                if event_store.is_request_pending(event_id, phone_number):
+                    return "You already requested to join this event. Waiting for host approval."
 
-                    if capacity:
-                        spots_info = f" ({len(participants)}/{capacity} spots filled)"
-                    else:
-                        spots_info = ""
+                # Check if previously denied
+                if event_store.is_request_denied(event_id, phone_number):
+                    return "Sorry, your request was previously declined."
 
-                    return f"You're in! You've joined '{selected_event['title']}'{spots_info}. See you there!"
-                else:
-                    return "Couldn't join that event. It may be full or you may already be signed up."
+                # Add pending request
+                event_store.add_pending_request(event_id, phone_number)
+
+                # Notify host
+                host_phone = selected_event.get("host_phone")
+                requester_name = user_store.get_name(phone_number) or phone_number
+                event_title = selected_event.get("title")
+                host_message = (
+                    f"{requester_name} is requesting to join '{event_title}'. "
+                    f"Reply 'approve {requester_name}' or 'deny {requester_name}'"
+                )
+                send_message(host_phone, host_message)
+
+                return "Request sent! Waiting for host approval."
             else:
                 return f"Please enter a number between 1 and {len(events)}."
         except ValueError:
@@ -552,3 +637,210 @@ def _handle_delete_flow(phone_number: str, state: dict, intent: str, text: str) 
             return "Deletion cancelled. Your event is still active."
 
     return "Text 'cancel' to exit or try again."
+
+
+# --- Phase 3 Handler Functions ---
+
+def _handle_register_flow(phone_number: str, state: dict, text: str) -> str:
+    """Handle the registration flow (Section 17)."""
+    current_step = state.get("step")
+
+    if current_step == "get_name":
+        name = text.strip()
+        if not name:
+            return "Please enter your name."
+
+        # Register the user
+        user_store.register_user(phone_number, name)
+
+        # Check if there's a pending flow to resume
+        pending_flow = state_store.get_pending_flow(phone_number)
+        state_store.clear_state(phone_number)
+
+        if pending_flow:
+            # Resume the intended flow
+            if pending_flow == "create_event":
+                state_store.start_flow(phone_number, "create")
+                return f"Thanks {name}! You're all set.\n\n{PROMPTS['title']}"
+            elif pending_flow == "join_event":
+                events = event_store.get_open_events_for_discovery(phone_number)
+                if events:
+                    state_store.start_flow(phone_number, "join")
+                    event_list = format_event_list(events, show_spots=True)
+                    return f"Thanks {name}! You're all set.\n\nAvailable events:\n\n{event_list}\n\n{JOIN_PROMPTS['select_event']}"
+                return f"Thanks {name}! You're all set. No events available right now. Text 'create event' to host one!"
+            elif pending_flow == "edit_event":
+                events = event_store.get_events_by_host(phone_number)
+                if events:
+                    state_store.start_flow(phone_number, "edit")
+                    event_list = format_hosted_events(events)
+                    return f"Thanks {name}! You're all set.\n\nYour events:\n\n{event_list}\n\n{EDIT_PROMPTS['select_event']}"
+                return f"Thanks {name}! You're all set. You haven't created any events yet. Text 'create event' to get started!"
+            elif pending_flow == "delete_event":
+                events = event_store.get_events_by_host(phone_number)
+                if events:
+                    state_store.start_flow(phone_number, "delete")
+                    event_list = format_hosted_events(events)
+                    return f"Thanks {name}! You're all set.\n\nYour events:\n\n{event_list}\n\n{DELETE_PROMPTS['select_event']}"
+                return f"Thanks {name}! You're all set. You haven't created any events yet."
+            elif pending_flow == "leave_event":
+                events = event_store.get_joined_events(phone_number)
+                if events:
+                    state_store.start_flow(phone_number, "leave")
+                    event_list = format_joined_events(events)
+                    return f"Thanks {name}! You're all set.\n\nEvents you've joined:\n\n{event_list}\n\n{LEAVE_PROMPTS['select_event']}"
+                return f"Thanks {name}! You're all set. You haven't joined any events yet."
+            elif pending_flow == "close_event":
+                events = [e for e in event_store.get_events_by_host(phone_number)
+                          if e.get("status") == "open"]
+                if events:
+                    state_store.start_flow(phone_number, "close")
+                    event_list = format_hosted_events(events)
+                    return f"Thanks {name}! You're all set.\n\nYour open events:\n\n{event_list}\n\n{CLOSE_PROMPTS['select_event']}"
+                return f"Thanks {name}! You're all set. You don't have any open events."
+
+        return f"Thanks {name}! You're all set. Text 'create event' to get started."
+
+    return "Please enter your name to get started."
+
+
+def _handle_close_flow(phone_number: str, state: dict, text: str) -> str:
+    """Handle the close event flow (Section 19)."""
+    current_step = state.get("step")
+
+    # Get host's open events
+    events = [e for e in event_store.get_events_by_host(phone_number)
+              if e.get("status") == "open"]
+
+    if current_step == "select_event":
+        if not events:
+            state_store.clear_state(phone_number)
+            return "You don't have any open events to close."
+
+        try:
+            selection = int(text)
+            if 1 <= selection <= len(events):
+                selected_event = events[selection - 1]
+                state_store.set_selected_event(phone_number, selected_event["id"])
+                state_store.set_step(phone_number, "confirm_groupchat")
+                return CLOSE_PROMPTS["confirm_groupchat"]
+            else:
+                return f"Please enter a number between 1 and {len(events)}."
+        except ValueError:
+            return f"Please enter a number between 1 and {len(events)}."
+
+    elif current_step == "confirm_groupchat":
+        event_id = state.get("selected_event_id")
+        event = event_store.get_event_by_id(event_id)
+
+        if not event:
+            state_store.clear_state(phone_number)
+            return "Event not found. Text 'close event' to try again."
+
+        text_lower = text.lower().strip()
+        create_chat = text_lower in ["yes", "y"]
+
+        # Close the event
+        event_store.close_event(event_id)
+
+        if create_chat:
+            # Build group chat with all participants
+            host_phone = event.get("host_phone")
+            participants = event.get("participants", [])
+            all_phones = [host_phone] + participants
+
+            # Get names for all participants
+            names_map = user_store.get_all_names(all_phones)
+            host_name = names_map.get(host_phone) or "Host"
+
+            # Build attendee list for welcome message
+            attendee_lines = [f"- {host_name} (Host)"]
+            for p_phone in participants:
+                p_name = names_map.get(p_phone) or p_phone
+                attendee_lines.append(f"- {p_name}")
+
+            welcome_message = (
+                f"Welcome to {event['title']}!\n\n"
+                f"When: {event['datetime']}\n"
+                f"Where: {event['location']}\n\n"
+                f"Attendees:\n"
+                + "\n".join(attendee_lines) +
+                "\n\nSee you there!"
+            )
+
+            # Create group chat
+            create_group_chat(all_phones, event["title"], welcome_message)
+
+            state_store.clear_state(phone_number)
+            return f"'{event['title']}' is now closed. Group chat created with all participants!"
+
+        state_store.clear_state(phone_number)
+        return f"'{event['title']}' is now closed. No group chat was created."
+
+    return "Text 'cancel' to exit or try again."
+
+
+def _handle_approve(phone_number: str, name: Optional[str]) -> str:
+    """Handle host approving a join request (Section 18.2)."""
+    if not name:
+        return "Please specify a name to approve. Example: 'approve John'"
+
+    # Find pending request matching the name in host's events
+    events = event_store.get_events_by_host(phone_number)
+
+    for event in events:
+        pending = event.get("pending_requests", [])
+        for requester_phone in pending:
+            requester_name = user_store.get_name(requester_phone)
+            if requester_name and requester_name.lower() == name.lower():
+                # Found matching request - approve it
+                event_id = event["id"]
+
+                # Remove from pending
+                event_store.remove_pending_request(event_id, requester_phone)
+
+                # Add to participants
+                event_store.join_event(event_id, requester_phone)
+
+                # Notify requester
+                send_message(
+                    requester_phone,
+                    f"Your request to join '{event['title']}' has been approved! See you there."
+                )
+
+                return f"Approved! {requester_name} has been added to '{event['title']}'."
+
+    return f"No pending request found from '{name}'. Check spelling or they may have already been processed."
+
+
+def _handle_deny(phone_number: str, name: Optional[str]) -> str:
+    """Handle host denying a join request (Section 18.2)."""
+    if not name:
+        return "Please specify a name to deny. Example: 'deny John'"
+
+    # Find pending request matching the name in host's events
+    events = event_store.get_events_by_host(phone_number)
+
+    for event in events:
+        pending = event.get("pending_requests", [])
+        for requester_phone in pending:
+            requester_name = user_store.get_name(requester_phone)
+            if requester_name and requester_name.lower() == name.lower():
+                # Found matching request - deny it
+                event_id = event["id"]
+
+                # Remove from pending
+                event_store.remove_pending_request(event_id, requester_phone)
+
+                # Add to denied list
+                event_store.add_denied_request(event_id, requester_phone)
+
+                # Notify requester
+                send_message(
+                    requester_phone,
+                    f"Your request to join '{event['title']}' was declined."
+                )
+
+                return f"Denied. {requester_name}'s request for '{event['title']}' has been declined."
+
+    return f"No pending request found from '{name}'. Check spelling or they may have already been processed."
