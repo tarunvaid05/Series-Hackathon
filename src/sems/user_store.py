@@ -8,6 +8,7 @@ Per Project-Requirements.txt Section 17 (User Registration):
 - First-time users prompted for name, existing users skip
 """
 
+import logging
 from datetime import datetime, timezone
 from typing import Dict, List, Optional
 
@@ -16,48 +17,64 @@ from sems.supabase_client import get_client
 
 def is_registered(phone: str) -> bool:
     """Check if phone has name registered."""
-    client = get_client()
-    response = client.table("users").select("phone, name").eq("phone", phone).maybe_single().execute()
-    if response.data:
-        return response.data.get("name") is not None
-    return False
+    try:
+        client = get_client()
+        response = client.table("users").select("phone, name").eq("phone", phone).maybe_single().execute()
+        if response and response.data:
+            return response.data.get("name") is not None
+        return False
+    except Exception as e:
+        logging.error(f"Supabase error in is_registered: {e}")
+        return False
 
 
 def get_name(phone: str) -> Optional[str]:
     """Get name for phone, None if not registered."""
-    client = get_client()
-    response = client.table("users").select("name").eq("phone", phone).maybe_single().execute()
-    if response.data:
-        return response.data.get("name")
-    return None
+    try:
+        client = get_client()
+        response = client.table("users").select("name").eq("phone", phone).maybe_single().execute()
+        if response and response.data:
+            return response.data.get("name")
+        return None
+    except Exception as e:
+        logging.error(f"Supabase error in get_name: {e}")
+        return None
 
 
 def register_user(phone: str, name: str) -> bool:
     """Register name for phone, return success."""
     if not phone or not name:
         return False
-    client = get_client()
-    user_data = {
-        "phone": phone,
-        "name": name,
-        "registered_at": datetime.now(timezone.utc).isoformat()
-    }
-    # Use upsert to handle both insert and update cases
-    response = client.table("users").upsert(user_data).execute()
-    return response.data is not None and len(response.data) > 0
+    try:
+        client = get_client()
+        user_data = {
+            "phone": phone,
+            "name": name,
+            "registered_at": datetime.now(timezone.utc).isoformat()
+        }
+        # Use upsert to handle both insert and update cases
+        response = client.table("users").upsert(user_data).execute()
+        return response and response.data is not None and len(response.data) > 0
+    except Exception as e:
+        logging.error(f"Supabase error in register_user: {e}")
+        return False
 
 
 def get_all_names(phones: List[str]) -> Dict[str, Optional[str]]:
     """Get names for multiple phones (for group chat). Returns dict of phone -> name."""
     if not phones:
         return {}
-    client = get_client()
-    response = client.table("users").select("phone, name").in_("phone", phones).execute()
-    result = {phone: None for phone in phones}
-    if response.data:
-        for user in response.data:
-            result[user["phone"]] = user.get("name")
-    return result
+    try:
+        client = get_client()
+        response = client.table("users").select("phone, name").in_("phone", phones).execute()
+        result = {phone: None for phone in phones}
+        if response and response.data:
+            for user in response.data:
+                result[user["phone"]] = user.get("name")
+        return result
+    except Exception as e:
+        logging.error(f"Supabase error in get_all_names: {e}")
+        return {phone: None for phone in phones}
 
 
 def find_users_by_name(name: str) -> List[dict]:
@@ -72,12 +89,16 @@ def find_users_by_name(name: str) -> List[dict]:
     """
     if not name:
         return []
-    client = get_client()
-    # Use ilike for case-insensitive partial matching
-    response = client.table("users").select("phone, name").ilike("name", f"%{name}%").execute()
-    if response.data:
-        return [{"phone": u["phone"], "name": u["name"]} for u in response.data]
-    return []
+    try:
+        client = get_client()
+        # Use ilike for case-insensitive partial matching
+        response = client.table("users").select("phone, name").ilike("name", f"%{name}%").execute()
+        if response and response.data:
+            return [{"phone": u["phone"], "name": u["name"]} for u in response.data]
+        return []
+    except Exception as e:
+        logging.error(f"Supabase error in find_users_by_name: {e}")
+        return []
 
 
 def get_user(phone: str) -> Optional[dict]:
@@ -100,14 +121,18 @@ def get_user(phone: str) -> Optional[dict]:
             "age": int             # optional
         }
     """
-    client = get_client()
-    response = client.table("users").select("*").eq("phone", phone).maybe_single().execute()
-    if response.data:
-        # Return without the phone key to match original format
-        user = response.data.copy()
-        user.pop("phone", None)
-        return user
-    return None
+    try:
+        client = get_client()
+        response = client.table("users").select("*").eq("phone", phone).maybe_single().execute()
+        if response and response.data:
+            # Return without the phone key to match original format
+            user = response.data.copy()
+            user.pop("phone", None)
+            return user
+        return None
+    except Exception as e:
+        logging.error(f"Supabase error in get_user: {e}")
+        return None
 
 
 def update_user(phone: str, updates: dict) -> bool:
@@ -129,12 +154,16 @@ def update_user(phone: str, updates: dict) -> bool:
     if not phone or not updates:
         return False
 
-    # First check if user exists
-    client = get_client()
-    check = client.table("users").select("phone").eq("phone", phone).maybe_single().execute()
-    if not check.data:
-        return False
+    try:
+        # First check if user exists
+        client = get_client()
+        check = client.table("users").select("phone").eq("phone", phone).maybe_single().execute()
+        if not check or not check.data:
+            return False
 
-    # Update the user
-    response = client.table("users").update(updates).eq("phone", phone).execute()
-    return response.data is not None and len(response.data) > 0
+        # Update the user
+        response = client.table("users").update(updates).eq("phone", phone).execute()
+        return response and response.data is not None and len(response.data) > 0
+    except Exception as e:
+        logging.error(f"Supabase error in update_user: {e}")
+        return False
