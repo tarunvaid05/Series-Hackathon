@@ -192,3 +192,90 @@ For event listings:
 - No events found: friendly message with suggestion
 - Already joined: inform user they're already participating
 - At capacity: inform user event is full
+
+--- PHASE 3 REQUIREMENTS ---
+
+17 User Registration
+Users must provide their name before creating or joining events.
+
+17.1 Name Collection
+- First-time users are prompted: "What's your name?"
+- Name is stored in data/users.json with phone number as key
+- Name persists across all interactions
+- Existing users skip this step
+
+17.2 User Data Structure
+```
+{
+  "+1234567890": {"name": "John", "registered_at": "2025-12-06T..."}
+}
+```
+
+18 Join Request Flow
+Joining events now requires host approval.
+
+18.1 Request Flow
+1. User texts "join event" or similar intent
+2. SEMS shows available events (open status, not full, not own)
+3. User selects event by number
+4. SEMS sends request notification to host: "[Name] is requesting to join [Event]. Reply 'approve [name]' or 'deny [name]'"
+5. User receives: "Request sent! Waiting for host approval."
+
+18.2 Approval Flow
+- Host replies "approve [name]" → participant added, both notified
+- Host replies "deny [name]" → request denied, requester notified, cannot re-apply
+
+18.3 Request Data Structure
+Events track pending and denied requests:
+```
+{
+  "pending_requests": ["+1111111111"],
+  "denied_requests": ["+2222222222"]
+}
+```
+
+19 Close Event Flow
+Hosts can close events to stop accepting new participants.
+
+19.1 Close Intent Triggering
+Keywords: "close event", "close registration", "stop registration"
+
+19.2 Close Flow
+1. SEMS lists host's open events
+2. Host selects event by number
+3. SEMS asks: "Would you like to create a group chat with all participants? (yes/no)"
+4. If yes: create group chat via messaging API, send welcome message
+5. Event status set to "closed", hidden from discovery
+
+19.3 Event Status
+- "open": visible in discovery, accepts requests
+- "closed": hidden from discovery, no new requests
+
+20 Group Chat Creation
+
+20.1 Group Chat via Messaging API
+Use POST /api/chats with multiple phone_numbers to create group chat.
+
+20.2 Welcome Message Format
+```
+Welcome to [Event Name]!
+
+When: [datetime]
+Where: [location]
+
+Attendees:
+- [Host Name] (Host)
+- [Participant 1 Name]
+- [Participant 2 Name]
+...
+
+See you there!
+```
+
+20.3 Group Chat Behavior
+- SEMS sends only the welcome message
+- No further SEMS bot interaction in group chat
+- Participants coordinate directly in group
+
+21 Updated Capacity Prompt
+When collecting capacity, prompt clarifies: "How many people can attend? (not including yourself, or 'skip' for no limit)"
