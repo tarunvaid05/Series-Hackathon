@@ -17,6 +17,7 @@ EDIT_INTENTS = ["edit event", "edit my event", "change my event", "modify event"
 JOIN_INTENTS = ["find events", "what's happening", "events near", "join event", "any events", "whats happening"]
 LEAVE_INTENTS = ["leave event", "cancel rsvp", "drop out", "quit event"]
 DELETE_INTENTS = ["delete event", "remove event", "delete my event"]
+MY_EVENTS_INTENTS = ["my events", "my enrolled events", "enrolled events", "events i joined"]
 
 # Phase 3 intent keywords (Sections 17-21)
 CLOSE_INTENTS = ["close event", "close registration", "stop registration"]
@@ -139,6 +140,11 @@ def detect_intent(text: str) -> Tuple[str, Optional[str]]:
         if phrase in text_lower:
             return ("leave_event", None)
 
+    # Check for my enrolled events intent
+    for phrase in MY_EVENTS_INTENTS:
+        if phrase in text_lower:
+            return ("my_events", None)
+
     # Check for confirm
     for keyword in CONFIRM_KEYWORDS:
         if text_lower == keyword or text_lower.startswith(keyword):
@@ -229,6 +235,32 @@ def format_joined_events(events: List[dict]) -> str:
     lines = []
     for i, event in enumerate(events, 1):
         lines.append(f"{i}. {event['title']} ({event['datetime']})")
+
+    return "\n".join(lines)
+
+
+def format_enrolled_events(events: List[dict]) -> str:
+    """Format enrolled events with status (capacity or closed)."""
+    if not events:
+        return ""
+
+    lines = []
+    for i, event in enumerate(events, 1):
+        status = event.get("status", "open")
+        if status == "closed":
+            status_str = "(closed)"
+        else:
+            capacity = event.get("capacity")
+            participants = event.get("participants", [])
+            current_count = len(participants)
+            if capacity is not None:
+                try:
+                    status_str = f"({current_count}/{int(capacity)})"
+                except (ValueError, TypeError):
+                    status_str = f"({current_count} joined)"
+            else:
+                status_str = f"({current_count} joined)"
+        lines.append(f"{i}. {event['title']} {status_str}")
 
     return "\n".join(lines)
 
@@ -376,6 +408,14 @@ def _handle_new_intent(phone_number: str, intent: str) -> str:
         event_list = format_hosted_events(events)
         return f"Your open events:\n\n{event_list}\n\n{CLOSE_PROMPTS['select_event']}"
 
+    elif intent == "my_events":
+        # Show enrolled events with status
+        events = event_store.get_joined_events(phone_number)
+        if not events:
+            return "You haven't joined any events yet. Text 'find events' to discover events!"
+        event_list = format_enrolled_events(events)
+        return f"Your enrolled events:\n\n{event_list}"
+
     else:
         # Default welcome message
         name = user_store.get_name(phone_number)
@@ -383,6 +423,7 @@ def _handle_new_intent(phone_number: str, intent: str) -> str:
         return (f"{greeting} Here's what you can do:\n"
                 "- 'create event' to host a new event\n"
                 "- 'find events' to see what's happening\n"
+                "- 'my events' to see events you've joined\n"
                 "- 'edit event' to modify your events\n"
                 "- 'close event' to finalize your event\n"
                 "- 'delete event' to remove your events")
@@ -753,11 +794,11 @@ def _handle_close_flow(phone_number: str, state: dict, text: str) -> str:
             names_map = user_store.get_all_names(all_phones)
             host_name = names_map.get(host_phone) or "Host"
 
-            # Build attendee list for welcome message
-            attendee_lines = [f"- {host_name} (Host)"]
+            # Build attendee list for welcome message with phone numbers
+            attendee_lines = [f"- {host_name} ({host_phone}) (Host)"]
             for p_phone in participants:
                 p_name = names_map.get(p_phone) or p_phone
-                attendee_lines.append(f"- {p_name}")
+                attendee_lines.append(f"- {p_name} ({p_phone})")
 
             welcome_message = (
                 f"Welcome to {event['title']}!\n\n"
