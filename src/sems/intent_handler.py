@@ -1,9 +1,19 @@
 """Intent detection and conversational flow logic for SEMS."""
 
+import logging
 from typing import List, Optional, Tuple
 
 from sems import state_store, event_store, user_store
-from sems.messaging_client import send_message, create_group_chat
+from sems.messaging_client import send_message, create_group_chat, get_chat_id, start_typing, stop_typing
+
+# Import AI intent analysis functions
+try:
+    from sems.intent_analysis_agent import analyze_intent, find_matching_events
+    AI_AVAILABLE = True
+except ImportError:
+    AI_AVAILABLE = False
+
+logger = logging.getLogger(__name__)
 
 # Intent keywords (Section 3.1: keyword matching is sufficient)
 CREATE_INTENTS = ["create event", "new event", "host an event", "make an event", "schedule an event", "plan an event"]
@@ -81,8 +91,8 @@ def detect_intent(text: str) -> Tuple[str, Optional[str]]:
     """
     Detect the intent from user message.
     Returns: Tuple of (intent, extracted_name)
-        - intent: "create_event", "edit_event", "join_event", "leave_event", "delete_event",
-                  "close_event", "approve", "deny", "cancel", "restart", "confirm", "skip", or "input"
+        - intent: "create_event", "create_event_ai", "edit_event", "join_event", "leave_event", "delete_event",
+                  "close_event", "approve", "deny", "cancel", "restart", "confirm", "skip", "menu", or "input"
         - extracted_name: Name extracted from approve/deny commands, or None
 
     IMPORTANT: Check longer phrases first to avoid conflicts.
@@ -95,15 +105,18 @@ def detect_intent(text: str) -> Tuple[str, Optional[str]]:
         if keyword in text_lower:
             return ("restart", None)
 
+    # Check for menu command (exact match only)
+    if text_lower == "menu":
+        return ("menu", None)
+
     # Check DELETE_INTENTS before cancel to avoid "delete event" matching "cancel"
     for phrase in DELETE_INTENTS:
         if phrase in text_lower:
             return ("delete_event", None)
 
-    # Check for cancel (can happen anytime)
-    for keyword in CANCEL_KEYWORDS:
-        if keyword in text_lower:
-            return ("cancel", None)
+    # Check for cancel - exact match only (not "cancel event" etc.)
+    if text_lower == "cancel":
+        return ("cancel", None)
 
     # Check for create event intent
     for phrase in CREATE_INTENTS:
@@ -154,6 +167,28 @@ def detect_intent(text: str) -> Tuple[str, Optional[str]]:
     for keyword in SKIP_KEYWORDS:
         if text_lower == keyword:
             return ("skip", None)
+
+    # No keyword match - try AI intent analysis as fallback
+    if AI_AVAILABLE:
+        try:
+            ai_result = analyze_intent(text)
+            ai_intent = ai_result.get("intent", "no_intent")
+
+            # Map AI intents to our internal intents
+            if ai_intent == "create_event":
+                return ("create_event_ai", None)  # Mark as AI-detected
+            elif ai_intent == "find_event":
+                return ("join_event", None)  # find_event maps to join flow
+            elif ai_intent == "edit_event":
+                return ("edit_event", None)
+            elif ai_intent == "my_events":
+                return ("my_events", None)
+            elif ai_intent == "delete_event":
+                return ("delete_event", None)
+            elif ai_intent == "no_intent":
+                return ("no_intent", None)
+        except Exception as e:
+            logger.error(f"AI intent analysis failed: {e}")
 
     # Default: treat as input for current step
     return ("input", None)
@@ -284,6 +319,68 @@ Where: {event['location']}
 Capacity: {capacity_str}"""
 
 
+def _handle_smart_find(phone_number: str, user_query: str) -> str:
+    """
+    Handle smart event discovery with AI-powered matching.
+    Uses typing indicators while AI is processing.
+
+    Args:
+        phone_number: User's phone number
+        user_query: The user's search query (e.g., "things to do in Battery Park")
+
+    Returns:
+        Response with matching events or all events as fallback
+    """
+    events = event_store.get_open_events_for_discovery(phone_number)
+
+    if not events:
+        return "No events available right now. Check back later or text 'create event' to host your own!"
+
+    # Try to get chat_id for typing indicator
+    chat_id = None
+    try:
+        chat_id = get_chat_id(phone_number)
+        if chat_id:
+            start_typing(chat_id)
+    except Exception as e:
+        logger.debug(f"Could not start typing indicator: {e}")
+
+    try:
+        # Use AI to find matching events
+        if AI_AVAILABLE:
+            matching_indices = find_matching_events(user_query, events)
+
+            if matching_indices:
+                # Show matched events first
+                matched_events = [events[i] for i in matching_indices if i < len(events)]
+                if matched_events:
+                    state_store.start_flow(phone_number, "join")
+                    event_list = format_event_list(matched_events, show_spots=True)
+
+                    # Only say "Based on your interest" if AI actually filtered results
+                    # If matched_events == all events, query was too vague - use generic header
+                    if len(matched_events) < len(events):
+                        response = (f"Based on your interest, here are some events:\n\n{event_list}\n\n"
+                                   f"{JOIN_PROMPTS['select_event']}\n\n"
+                                   "Or type 'find events' to see all available events.")
+                    else:
+                        response = f"Available events:\n\n{event_list}\n\n{JOIN_PROMPTS['select_event']}"
+                    return response
+
+        # Fallback: show all events
+        state_store.start_flow(phone_number, "join")
+        event_list = format_event_list(events, show_spots=True)
+        return f"Available events:\n\n{event_list}\n\n{JOIN_PROMPTS['select_event']}"
+
+    finally:
+        # Stop typing indicator
+        if chat_id:
+            try:
+                stop_typing(chat_id)
+            except Exception as e:
+                logger.debug(f"Could not stop typing indicator: {e}")
+
+
 def process_message(phone_number: str, text: str) -> str:
     """
     Process an incoming message and return the response.
@@ -311,6 +408,19 @@ def process_message(phone_number: str, text: str) -> str:
         state_store.start_flow(phone_number, "create")
         return PROMPTS["title"]
 
+    # Handle menu - always works, shows options and clears state
+    if intent == "menu":
+        state_store.clear_state(phone_number)
+        name = user_store.get_name(phone_number)
+        greeting = f"Hi {name}!" if name else "Hi!"
+        return (f"{greeting} Here's what you can do:\n"
+                "- 'create event' - host a new event\n"
+                "- 'find events' - see what's happening\n"
+                "- 'my events' - see events you've joined\n"
+                "- 'edit event' - modify your events\n"
+                "- 'close event' - finalize your event\n"
+                "- 'delete event' - remove your events")
+
     # --- PHASE 3: Handle approve/deny intents (host actions) ---
     if intent == "approve":
         return _handle_approve(phone_number, extracted_name)
@@ -323,10 +433,12 @@ def process_message(phone_number: str, text: str) -> str:
         if state is not None and state.get("flow_type") == "register":
             return _handle_register_flow(phone_number, state, text_stripped)
         # Need to start registration for any actionable intent
-        if intent in ["create_event", "edit_event", "join_event", "leave_event",
+        if intent in ["create_event", "create_event_ai", "edit_event", "join_event", "leave_event",
                       "delete_event", "close_event"]:
             state_store.start_flow(phone_number, "register")
-            state_store.set_pending_flow(phone_number, intent)
+            # Map create_event_ai to create_event for pending flow
+            pending = "create_event" if intent == "create_event_ai" else intent
+            state_store.set_pending_flow(phone_number, pending)
             return REGISTER_PROMPTS["get_name"]
         # Default welcome for unregistered users
         if state is None:
@@ -335,6 +447,14 @@ def process_message(phone_number: str, text: str) -> str:
 
     # --- NOT IN A FLOW: Check for intent to start a new flow ---
     if state is None:
+        # Special handling for AI-detected join_event intent - use smart matching
+        # Check if this was detected via AI (original text doesn't match keyword)
+        if intent == "join_event":
+            text_lower = text.lower().strip()
+            is_keyword_match = any(phrase in text_lower for phrase in JOIN_INTENTS)
+            if not is_keyword_match and AI_AVAILABLE:
+                # AI detected find intent - use smart matching with original query
+                return _handle_smart_find(phone_number, text_stripped)
         return _handle_new_intent(phone_number, intent)
 
     # --- IN A FLOW: Route to appropriate flow handler ---
@@ -366,6 +486,10 @@ def _handle_new_intent(phone_number: str, intent: str) -> str:
     if intent == "create_event":
         state_store.start_flow(phone_number, "create")
         return PROMPTS["title"]
+
+    elif intent == "create_event_ai":
+        state_store.start_flow(phone_number, "create")
+        return f"It seems like you'd like to create an event!\n\n{PROMPTS['title']}"
 
     elif intent == "edit_event":
         events = event_store.get_events_by_host(phone_number)
@@ -425,6 +549,15 @@ def _handle_new_intent(phone_number: str, intent: str) -> str:
             lines.append("Events you've joined:")
             lines.append(format_enrolled_events_with_host(joined, is_host=False))
         return "\n".join(lines)
+
+    elif intent == "no_intent":
+        # AI determined message doesn't match any event intent
+        return ("The event management system can't help you with that, but if you're interested we can help you with:\n"
+                "- 'create event' to host a new event\n"
+                "- 'find events' to see what's happening\n"
+                "- 'my events' to see events you've joined\n"
+                "- 'edit event' to modify your events\n"
+                "- 'delete event' to remove your events")
 
     else:
         # Default welcome message
@@ -569,6 +702,18 @@ def _handle_edit_flow(phone_number: str, state: dict, intent: str, text: str) ->
 def _handle_join_flow(phone_number: str, state: dict, text: str) -> str:
     """Handle the join event flow (Section 18 - Phase 3 request-based joining)."""
     current_step = state["step"]
+
+    # Check if user wants to see all events (typed "find events" etc.)
+    text_lower = text.lower().strip()
+    if any(phrase in text_lower for phrase in JOIN_INTENTS):
+        # Reset flow and show all events
+        state_store.clear_state(phone_number)
+        events = event_store.get_open_events_for_discovery(phone_number)
+        if not events:
+            return "No events available to join right now. Check back later or text 'create event' to host your own!"
+        state_store.start_flow(phone_number, "join")
+        event_list = format_event_list(events, show_spots=True)
+        return f"Available events:\n\n{event_list}\n\n{JOIN_PROMPTS['select_event']}"
 
     if current_step == "select_event":
         # Use discovery function that excludes pending/denied requests
@@ -750,7 +895,7 @@ def _handle_register_flow(phone_number: str, state: dict, text: str) -> str:
                     return f"Thanks {name}! You're all set.\n\nYour open events:\n\n{event_list}\n\n{CLOSE_PROMPTS['select_event']}"
                 return f"Thanks {name}! You're all set. You don't have any open events."
 
-        return f"Thanks {name}! You're all set. Text 'create event' to get started."
+        return f"Thanks {name}! What are you looking for today?\n\nFor detailed options, type 'menu'"
 
     return "Please enter your name to get started."
 
@@ -819,8 +964,11 @@ def _handle_close_flow(phone_number: str, state: dict, text: str) -> str:
                 "\n\nSee you there!"
             )
 
-            # Create group chat
-            create_group_chat(all_phones, event["title"], welcome_message)
+            # Create group chat and capture chat_id
+            result = create_group_chat(all_phones, event["title"], welcome_message)
+            chat_id = result.get("chat_id")
+            if chat_id:
+                event_store.set_group_chat_id(event_id, chat_id)
 
             state_store.clear_state(phone_number)
             return f"'{event['title']}' is now closed. Group chat created with all participants!"
