@@ -15,6 +15,14 @@ except ImportError:
 
 logger = logging.getLogger(__name__)
 
+
+def _is_phone_placeholder(name: str) -> bool:
+    """Check if a name is actually a phone number placeholder (starts with + or all digits)."""
+    if not name:
+        return True
+    # Phone numbers typically start with + or are all digits
+    return name.startswith('+') or name.replace('-', '').replace(' ', '').isdigit()
+
 # Intent keywords (Section 3.1: keyword matching is sufficient)
 CREATE_INTENTS = ["create event", "new event", "host an event", "make an event", "schedule an event", "plan an event"]
 CANCEL_KEYWORDS = ["cancel"]
@@ -419,11 +427,10 @@ def process_message(phone_number: str, text: str) -> str:
     # Handle restart - clears state and starts create flow
     if intent == "restart":
         state_store.clear_state(phone_number)
-        # Check registration before starting create flow
+        # Auto-register if needed (uses phone as placeholder name)
         if not user_store.is_registered(phone_number):
-            state_store.start_flow(phone_number, "register")
-            state_store.set_pending_flow(phone_number, "create_event")
-            return REGISTER_PROMPTS["get_name"]
+            user_store.register_user(phone_number, phone_number)
+            logger.info(f"Auto-registered new user on restart: {phone_number}")
         state_store.start_flow(phone_number, "create")
         return PROMPTS["title"]
 
@@ -431,7 +438,8 @@ def process_message(phone_number: str, text: str) -> str:
     if intent == "menu":
         state_store.clear_state(phone_number)
         name = user_store.get_name(phone_number)
-        greeting = f"Hi {name}!" if name else "Hi!"
+        # Only greet by name if it's a real name (not phone placeholder)
+        greeting = f"Hi {name}!" if name and not _is_phone_placeholder(name) else "Hi!"
         return (f"{greeting} Here's what you can do:\n"
                 "- 'create event' - host a new event\n"
                 "- 'find events' - see what's happening\n"
@@ -452,23 +460,12 @@ def process_message(phone_number: str, text: str) -> str:
     if intent == "decline_invite":
         return _handle_decline_invite(phone_number, extracted_name)
 
-    # --- PHASE 3: Check if user needs to register first ---
+    # --- PHASE 3: Auto-register unregistered users with phone as placeholder name ---
     if not user_store.is_registered(phone_number):
-        # Already in registration flow
-        if state is not None and state.get("flow_type") == "register":
-            return _handle_register_flow(phone_number, state, text_stripped)
-        # Need to start registration for any actionable intent
-        if intent in ["create_event", "create_event_ai", "edit_event", "join_event", "leave_event",
-                      "delete_event", "close_event"]:
-            state_store.start_flow(phone_number, "register")
-            # Map create_event_ai to create_event for pending flow
-            pending = "create_event" if intent == "create_event_ai" else intent
-            state_store.set_pending_flow(phone_number, pending)
-            return REGISTER_PROMPTS["get_name"]
-        # Default welcome for unregistered users
-        if state is None:
-            state_store.start_flow(phone_number, "register")
-            return REGISTER_PROMPTS["get_name"]
+        # Auto-register with phone number as placeholder name (users update via web UI)
+        user_store.register_user(phone_number, phone_number)
+        logger.info(f"Auto-registered new user: {phone_number}")
+        # Continue processing - don't interrupt their flow
 
     # --- NOT IN A FLOW: Check for intent to start a new flow ---
     if state is None:
@@ -596,7 +593,8 @@ def _handle_new_intent(phone_number: str, intent: str) -> str:
     else:
         # Default welcome message
         name = user_store.get_name(phone_number)
-        greeting = f"Hi {name}!" if name else "Hi!"
+        # Only greet by name if it's a real name (not phone placeholder)
+        greeting = f"Hi {name}!" if name and not _is_phone_placeholder(name) else "Hi!"
         return (f"{greeting} Here's what you can do:\n"
                 "- 'create event' to host a new event\n"
                 "- 'find events' to see what's happening\n"
